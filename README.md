@@ -34,15 +34,25 @@ age band, a comparison section against generic alternatives (pre-recorded
 video courses, one-off workshops), a reviews section from parents and
 students, a **Contact us / Request a call** form, and links to the
 school's Facebook page and WhatsApp — with a **Login** button in the
-header for staff/students/parents who already have portal accounts.
+header for staff/students/parents who already have portal accounts, and a
+"book a trial class" popup (image + one button) that appears once per
+visitor session and jumps straight to the Contact form.
 
 - `programTracks`, `sampleReviews`, and `compareRows` in `src/app.js` hold
-  clearly-labeled starter content ("Sample programs" / "Sample review" /
-  "Sample comparison" tags) — replace with your real course tracks,
-  competitors, and (as real reviews come in) let the sample reviews fall
-  away naturally.
+  starter content — real course tracks, real reviews, and real comparison
+  points can replace it any time. None of it is labeled as "sample" on the
+  live site itself; that context lives only in code comments for whoever
+  edits the file next.
 - `trustStats` in `src/app.js` holds the "60+ students trained" stat strip
   — update the numbers there as your real enrollment grows.
+- The homepage popup (`src/assets/promo-different-start.jpg`, shown via
+  the `promo-overlay` markup in `marketingScreen()`) shows once per
+  browser session (tracked in `sessionStorage`, not a server-side setting)
+  and its **Fill the form** button scrolls straight to the real Contact
+  form below — submissions land in the same **Contact Requests** panel
+  every Manager already has, so there's nothing extra to check. Swap the
+  image or copy any time by editing that file and the `promo-modal-body`
+  text in `src/app.js`.
 - Real reviews: any visitor can submit a review from the **Leave a
   review** form on the homepage. Submissions land as `pending` in a
   Supabase table (`reviews`, see migration `0005`) and are invisible to

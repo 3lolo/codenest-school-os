@@ -36,6 +36,7 @@ const state = {
   reviewBusy: false,
   reviewsDirectory: null,
   reviewsBusy: null,
+  promoModalDismissed: false,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -842,31 +843,29 @@ function forcePasswordScreen() {
   `;
 }
 
+// Starter testimonials shown until real, Manager-approved reviews come in
+// from the "Leave a review" form — no visible "sample" labeling on the
+// live site; swap these for real quotes any time in this file.
 const sampleReviews = [
   {
     quote: "My son couldn't stop talking about the game he built in class — he's already asking when the next module starts!",
     name: "Parent of a Junior Coders student",
-    tag: "Sample review",
   },
   {
     quote: "I built my own website in the Code Builders track and showed it to my whole class. Best decision my parents made for me this year.",
     name: "Code Builders student, age 12",
-    tag: "Sample review",
   },
   {
     quote: "ابني بقى يتحمس يروح الحصة كل أسبوع، وعمل أول لعبة له بنفسه — فخورين جدًا فيه.",
     name: "والد طالب في مسار Junior Coders",
-    tag: "مراجعة تجريبية",
   },
   {
     quote: "تعلمت البرمجة من الصفر وعملت أول موقع إلكتروني ليا في خلال شهرين بس.",
     name: "طالبة في مسار Code Builders",
-    tag: "مراجعة تجريبية",
   },
   {
     quote: "The instructors are patient and really get how kids learn. My daughter went from \"I don't get coding\" to teaching her little brother in a few weeks.",
     name: "Parent of a Young Developers student",
-    tag: "Sample review",
   },
 ];
 
@@ -925,8 +924,22 @@ function marketingScreen() {
   const notice = state.contactNotice;
   const reviewNotice = state.reviewNotice;
   const allReviews = [...state.publicReviews, ...sampleReviews];
+  if (!state.promoModalDismissed && promoModalSeen()) state.promoModalDismissed = true;
+  const showPromo = !state.promoModalDismissed;
   return `
     <div class="marketing">
+      ${showPromo ? `
+        <div class="promo-overlay" onclick="if (event.target === this) dismissPromoModal()">
+          <div class="promo-modal" role="dialog" aria-modal="true" aria-label="Enroll your child">
+            <button type="button" class="promo-close" onclick="dismissPromoModal()" aria-label="Close">&times;</button>
+            <img src="/src/assets/promo-different-start.jpg" alt="Every child has a different beginning — Hero Tech Academy" />
+            <div class="promo-modal-body">
+              <p>Ready to help your child start? Book a free trial class today.</p>
+              <button type="button" class="promo-cta" onclick="openPromoForm()">Fill the form</button>
+            </div>
+          </div>
+        </div>
+      ` : ""}
       <header class="m-nav">
         <div class="brand">
           <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
@@ -957,7 +970,7 @@ function marketingScreen() {
 
       <section id="features" class="m-section">
         <h2>Our Coding Programs</h2>
-        <p class="m-sub"><span class="sample-tag">Sample programs</span> — replace with your real course tracks, ages, and outcomes.</p>
+        <p class="m-sub">Structured tracks by age, so every child starts at the right level.</p>
         <div class="m-cards">
           ${programTracks.map((track) => `
             <article class="m-card">
@@ -971,7 +984,7 @@ function marketingScreen() {
 
       <section id="compare" class="m-section">
         <h2>How We Compare</h2>
-        <p class="m-sub"><span class="sample-tag">Sample comparison</span> — a general picture of how a program like ours stacks up against common alternatives for kids' coding education. Edit freely once you know your real competitors.</p>
+        <p class="m-sub">How Hero Tech Academy stacks up against common alternatives for kids' coding education.</p>
         <div class="table-panel">
           <table class="m-compare">
             <thead><tr><th></th><th>${school.name}</th><th>Pre-recorded video courses</th><th>One-off workshops</th></tr></thead>
@@ -984,11 +997,10 @@ function marketingScreen() {
 
       <section id="reviews" class="m-section">
         <h2>What Parents &amp; Students Say</h2>
-        <p class="m-sub">We've trained <strong>60+ students</strong> so far. ${state.publicReviews.length ? "" : `<span class="sample-tag">Sample reviews</span> — `}real reviews approved by a Manager appear here alongside these starter examples.</p>
+        <p class="m-sub">We've trained <strong>60+ students</strong> so far — here's what a few of them have to say.</p>
         <div class="m-cards">
           ${allReviews.map((review) => `
             <article class="m-card m-review">
-              ${review.tag ? `<span class="sample-tag">${review.tag}</span>` : ""}
               <p dir="auto">&ldquo;${review.quote}&rdquo;</p>
               <strong>${review.name}</strong>
               ${review.role_or_school ? `<span class="m-review-role">${review.role_or_school}</span>` : ""}
@@ -999,7 +1011,7 @@ function marketingScreen() {
 
         <form class="m-review-form" onsubmit="handleReviewSubmit(event)">
           <h3>Leave a review</h3>
-          ${reviewNotice ? `<p class="${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}</p>` : ""}
+          ${reviewNotice ? `<p class="notice-row ${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}<button type="button" class="notice-dismiss" onclick="dismissReviewNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
           <div class="m-review-form-grid">
             <label>Your name<input type="text" name="name" required /></label>
             <label>You are a... (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent of a Code Builders student" /></label>
@@ -1027,7 +1039,7 @@ function marketingScreen() {
             <div class="m-contact-social">${socialLinksHtml()}</div>
           </div>
           <form class="m-contact-form" onsubmit="handleContactSubmit(event)">
-            ${notice ? `<p class="${notice.type === "error" ? "auth-error" : "m-success"}">${notice.message}</p>` : ""}
+            ${notice ? `<p class="notice-row ${notice.type === "error" ? "auth-error" : "m-success"}">${notice.message}<button type="button" class="notice-dismiss" onclick="dismissContactNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
             <label>Name<input type="text" name="name" required /></label>
             <label>Email<input type="email" name="email" required /></label>
             <label>Phone (optional)<input type="tel" name="phone" /></label>
@@ -1045,6 +1057,42 @@ function marketingScreen() {
       </footer>
     </div>
   `;
+}
+
+// The "book a trial class" popup shows once per browser session — dismiss
+// state lives in sessionStorage so it reappears on the visitor's next
+// visit instead of nagging repeatedly on every page render this session.
+function promoModalSeen() {
+  try {
+    return sessionStorage.getItem("htaPromoSeen") === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markPromoModalSeen() {
+  try {
+    sessionStorage.setItem("htaPromoSeen", "1");
+  } catch {
+    // Ignore storage errors (private browsing, disabled storage, etc.).
+  }
+}
+
+function dismissPromoModal() {
+  state.promoModalDismissed = true;
+  markPromoModalSeen();
+  render();
+}
+
+// Closes the popup and takes the visitor straight to the real Contact
+// form — submissions there already land in the Contact Requests panel
+// every Manager can see, so there's no separate inbox to check.
+function openPromoForm() {
+  dismissPromoModal();
+  requestAnimationFrame(() => {
+    document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    document.querySelector(".m-contact-form input[name='name']")?.focus();
+  });
 }
 
 function beginLogin() {
@@ -1657,6 +1705,14 @@ window.handleForcePasswordSubmit = handleForcePasswordSubmit;
 window.generateCredentials = generateCredentials;
 window.resetCredentials = resetCredentials;
 window.dismissAccountsNotice = dismissAccountsNotice;
+window.dismissPromoModal = dismissPromoModal;
+window.openPromoForm = openPromoForm;
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !state.promoModalDismissed && state.authMode === "marketing") {
+    dismissPromoModal();
+  }
+});
 
 async function initApp() {
   render();

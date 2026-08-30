@@ -30,6 +30,24 @@ Commands run:
   (confirming there is no demo dashboard, no fake sample data, and no role
   switcher anywhere in the app); "Back to homepage" returning to the
   marketing page; and submitting the Contact us form.
+- A full inline-handler audit: every `onclick`/`onsubmit`/`oninput` in
+  `src/app.js` (static and dynamically-built, e.g. the account row's
+  generate/reset button) was cross-checked one-for-one against the
+  functions exported on `window`, in both directions — this is the same
+  class of bug as an earlier `setRole` regression that only a runtime
+  check could catch. Two dead exports were found (`dismissContactNotice`,
+  `dismissReviewNotice` had no button wired to them) and fixed by adding a
+  dismiss button to both the contact and review success/error banners.
+- A second Playwright pass clicked through every reachable control on the
+  homepage in one run: all four nav anchor links scroll to their section;
+  the new "book a trial class" popup opens on load, closes via its ✕
+  button, a click outside itself, and the Escape key, stays dismissed for
+  the rest of that browser session (`sessionStorage`), reappears in a
+  fresh session, and its **Fill the form** button scrolls to and focuses
+  the Contact form's name field; both the Contact and Leave-a-review forms
+  submit and their new dismiss buttons clear the notice; and Login ->
+  "not connected yet" -> Back to homepage all round-trip cleanly. Zero
+  console or page errors across the whole run.
 
 ## What Was Tested
 
