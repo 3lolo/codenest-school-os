@@ -13,8 +13,8 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads", "settings", "audit"],
-  "School Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads"],
+  "Super Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
+  "School Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews"],
   Instructor: ["dashboard", "students", "classes", "assignments", "attendance", "communications", "notifications", "accounts"],
   Student: ["dashboard", "assignments", "attendance", "communications", "notifications"],
   Parent: ["dashboard", "students", "assignments", "attendance", "communications", "notifications"],

@@ -27,4 +27,4 @@ await writeFile(join(dist, "src", "config.js"), config);
 const html = await readFile(join(dist, "index.html"), "utf8");
 await writeFile(join(dist, "index.html"), html.replaceAll("./src/", "/src/"));
 
-console.log("Built CodeNest School OS into dist/");
+console.log("Built Hero Tech Academy into dist/");

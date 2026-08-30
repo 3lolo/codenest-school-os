@@ -6,9 +6,10 @@ your first Manager login.
 
 ## 0. What You're Deploying
 
-- A public marketing homepage (hero, account-type breakdown, a sample
-  comparison section, sample reviews, and a Contact us / Request a call
-  form) with a **Login** button.
+- A public marketing homepage for **Hero Tech Academy** (hero, account-type
+  breakdown, a sample comparison section, a reviews section with a public
+  "Leave a review" form, Facebook/WhatsApp links, and a Contact us /
+  Request a call form) with a **Login** button.
 - Three account types issued from inside the app: **Manager** (full school
   operations), **Instructor** (their own classes, and can create/reset
   **Student** logins for their own students only), and **Student**.
@@ -22,7 +23,7 @@ From inside this project folder:
 ```bash
 git init                      # if it isn't already a repo
 git add .
-git commit -m "Initial commit: CodeNest School OS"
+git commit -m "Initial commit: Hero Tech Academy"
 ```
 
 Then create an empty repository on GitHub (no README/license, so it stays
@@ -55,8 +56,11 @@ exists for local experimentation and inserts fictional students):
    Auth logins).
 6. Run `supabase/migrations/0004_contact_requests.sql` (the homepage's
    Contact us / Request a call form).
-7. Go to Project Settings -> API.
-8. Copy:
+7. Run `supabase/migrations/0005_reviews.sql` (the homepage's public
+   reviews — visitor submissions land as `pending` and only show up once a
+   Manager approves them).
+8. Go to Project Settings -> API.
+9. Copy:
    - Project URL
    - anon public key
    - `service_role` secret key (Project Settings -> API -> Project API
@@ -64,7 +68,7 @@ exists for local experimentation and inserts fictional students):
 
 (If you only want a quick, throwaway look at the UI with fabricated
 sample data, you can instead run only `0001` and `supabase/seed.sql` and
-skip 0002-0004 — but that isn't the final/production setup: there is no
+skip 0002-0005 — but that isn't the final/production setup: there is no
 demo mode, so with Supabase configured but no accounts migration, the app
 shows a real sign-in form with nothing to sign in to yet.)
 
@@ -99,7 +103,7 @@ Then click Deploy.
 
 Open the deployed site. You should land on the marketing homepage; click
 **Login**. You should reach a real sign-in screen once migrations
-0002-0004 have been run and the environment variables above are set.
+0002-0005 have been run and the environment variables above are set.
 
 There is no demo mode. If Supabase isn't configured yet, or the env vars
 are missing, clicking **Login** shows a plain "this portal isn't
@@ -113,18 +117,21 @@ as a Manager (Super Admin or School Admin) — so the very first Manager has
 to be created by hand, once, directly in Supabase:
 
 1. In the Supabase Dashboard, go to Authentication -> Users -> Add user.
-   Enter your own email and a password, and check "Auto Confirm User".
+   Enter the email you want to use as the Super Admin's login (for
+   example, `eng.ali@yourdomain.com` — any real inbox works, it does not
+   have to match the school's domain) and a password, and check "Auto
+   Confirm User".
 2. Copy that new user's UUID from the Users list.
 3. In the SQL Editor, run (replace the placeholders):
 
    ```sql
    insert into public.user_profiles (user_id, role, full_name, email, must_change_password)
-   values ('<paste-the-user-uuid>', 'Super Admin', 'Your Name', 'you@example.com', false);
+   values ('<paste-the-user-uuid>', 'Super Admin', 'Eng.Ali', '<the-email-you-used-above>', false);
    ```
 
 4. Open the deployed site, click **Login**, and sign in with that email
    and password. You now have full Manager access, including
-   **Accounts & Logins** and **Contact Requests**.
+   **Accounts & Logins**, **Contact Requests**, and **Reviews**.
 
 From there:
 
@@ -137,6 +144,9 @@ From there:
   their own classes, and can issue/reset those students' logins directly.
 - Submissions from the homepage's Contact us / Request a call form appear
   under **Contact Requests**.
+- Reviews submitted from the homepage's **Leave a review** form appear
+  under **Reviews** as "Pending" — approve or reject each one there.
+  Approved reviews then show up publicly on the homepage.
 
 ## 7. Run Tests Before Publishing
 
@@ -153,10 +163,13 @@ The tests check:
 - Instructors only see students in their assigned classes.
 - Managers (Super Admin and School Admin) and Instructors can reach
   Accounts & Logins; Students and Parents cannot.
-- Only Managers can reach Contact Requests.
+- Only Managers can reach Contact Requests and the Reviews moderation panel.
 - Global search does not leak staff, family, or unrelated student records.
 - Production RLS avoids public read-all policies, and the Contact
   Requests table only allows public **insert**, never public read/update.
+- The Reviews table only allows public **insert of pending rows** and
+  public **read of approved rows** — pending/rejected reviews are never
+  publicly readable, and only a Manager can approve or reject one.
 - `api/create-account.js` re-verifies the caller's role server-side and
   rejects an Instructor issuing anything but a Student login outside their
   own classes.
@@ -189,6 +202,10 @@ In production:
 - Only Super Admin can read audit logs and change platform settings.
 - Anyone (even signed out) can insert into `contact_requests` from the
   homepage form; only Managers can read or update those rows.
+- Anyone (even signed out) can insert a `pending` row into `reviews` from
+  the homepage's "Leave a review" form; only approved rows are publicly
+  readable, and only Managers can read pending/rejected rows or change a
+  review's status.
 
 ## Production Security Note
 

@@ -71,7 +71,13 @@ select:focus-visible {
   align-items: center;
 }
 
-.brand-mark,
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
 .avatar {
   width: 44px;
   height: 44px;
@@ -573,6 +579,7 @@ code {
 }
 
 .auth-screen {
+  grid-column: 1 / -1;
   min-height: 100vh;
   display: grid;
   place-items: center;
@@ -695,6 +702,7 @@ code {
 /* ---------- Marketing / homepage ---------- */
 
 .marketing {
+  grid-column: 1 / -1;
   background: #fff;
   color: var(--ink);
   min-height: 100vh;
@@ -740,6 +748,55 @@ code {
   color: #fff;
   font-weight: 700;
   padding: 0 20px;
+}
+
+.m-nav-social {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.m-social-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.m-social-link svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+
+.m-social-link span {
+  display: none;
+}
+
+.m-social-link:hover {
+  color: var(--brand);
+}
+
+.m-contact-social,
+.m-footer-social {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.m-contact-social .m-social-link,
+.m-footer-social .m-social-link {
+  font-size: 14px;
+}
+
+.m-contact-social .m-social-link span,
+.m-footer-social .m-social-link span {
+  display: inline;
 }
 
 .m-hero {
@@ -841,6 +898,17 @@ code {
   font-style: italic;
 }
 
+.m-review-role {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.m-review-stars {
+  color: #d4a017;
+  font-size: 14px;
+  letter-spacing: 1px;
+}
+
 .sample-tag {
   display: inline-flex;
   align-items: center;
@@ -851,6 +919,62 @@ code {
   font-size: 12px;
   font-weight: 800;
   margin-right: 6px;
+  width: fit-content;
+}
+
+.m-review-form {
+  display: grid;
+  gap: 14px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 640px;
+}
+
+.m-review-form h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.m-review-form label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.m-review-form input,
+.m-review-form select,
+.m-review-form textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  width: 100%;
+}
+
+.m-review-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.m-review-form button {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  min-height: 44px;
+  justify-self: start;
+  padding: 0 22px;
+}
+
+.m-review-form small {
+  color: var(--muted);
 }
 
 .m-compare {
@@ -958,13 +1082,23 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
   padding: 28px 32px 40px;
   color: var(--muted);
   font-size: 13px;
 }
 
+.m-footer-social {
+  margin-top: 0;
+}
+
 @media (max-width: 900px) {
   .m-nav-links {
+    display: none;
+  }
+
+  .m-nav-social .m-social-link span {
     display: none;
   }
 
@@ -973,6 +1107,10 @@ code {
   }
 
   .m-contact-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .m-review-form-grid {
     grid-template-columns: 1fr;
   }
 

@@ -79,8 +79,23 @@ username (email) and password instead of a shared/preview identity:
 the very first thing a visitor sees, before any login. It covers:
 
 - Hero + a breakdown of the three account types.
-- A sample "how it compares" section (`compareRows`) and sample reviews
-  (`sampleReviews`) — both clearly labeled as sample content to replace.
+- A sample "how it compares" section (`compareRows`) — clearly labeled as
+  sample content to replace.
+- A reviews section that renders `[...state.publicReviews, ...sampleReviews]`
+  — real, Manager-approved reviews first, then the clearly-tagged sample
+  reviews (three English, two Arabic) as filler until real ones exist.
+  Quotes render with `dir="auto"` so Arabic and English both display with
+  correct text direction.
+- A public "Leave a review" form (`handleReviewSubmit()`) that inserts
+  into `public.reviews` (migration `0005_reviews.sql`) using the anon key
+  under an insert-only RLS policy restricted to `status = 'pending'`.
+  Managers moderate submissions from the in-app **Reviews** panel
+  (`reviewsView()` / `setReviewStatus()`), gated by `public.is_admin()`;
+  only `status = 'approved'` rows are ever publicly readable
+  (`loadPublicReviews()`).
+- Facebook and WhatsApp links (`socialLinksHtml()`, driven by
+  `school.social.facebook` / `school.social.whatsapp`) shown in the nav,
+  the contact section, and the footer.
 - A Contact us / Request a call form that inserts into
   `public.contact_requests` (migration `0004_contact_requests.sql`) using
   the anon key under an insert-only RLS policy. Managers read submissions

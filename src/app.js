@@ -31,6 +31,11 @@ const state = {
   leadsDirectory: null,
   contactNotice: null,
   contactBusy: false,
+  publicReviews: [],
+  reviewNotice: null,
+  reviewBusy: false,
+  reviewsDirectory: null,
+  reviewsBusy: null,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -52,6 +57,7 @@ const navItems = [
   ["notifications", "Notifications", "bell"],
   ["accounts", "Accounts & Logins", "key"],
   ["leads", "Contact Requests", "message"],
+  ["reviews", "Reviews", "chart"],
   ["settings", "Settings", "gear"],
   ["audit", "Audit", "shield"],
 ];
@@ -61,8 +67,12 @@ const navItems = [
 // `school` holds the editable defaults for a brand-new deployment before
 // a Manager opens Settings and changes them.
 let school = {
-  name: "CodeNest Academy",
+  name: "Hero Tech Academy",
   portalUrl: "",
+  social: {
+    facebook: "https://www.facebook.com/profile.php?id=61591036567069",
+    whatsapp: "+3791838956",
+  },
   settings: {
     absenceThreshold: 3,
     parentAssignmentEmails: true,
@@ -112,6 +122,9 @@ function navigate(view) {
   if (view === "leads" && canManageAccounts()) {
     loadLeads().then(renderContentOnly);
   }
+  if (view === "reviews" && ["Super Admin", "School Admin"].includes(state.role)) {
+    loadReviewsDirectory().then(renderContentOnly);
+  }
 }
 
 function setSearch(value) {
@@ -150,7 +163,7 @@ function shell() {
   return `
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">CN</div>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <div>
           <strong>${school.name}</strong>
           <span>School Operations</span>
@@ -210,6 +223,7 @@ function titleForView() {
     notifications: "Notification Center",
     accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
     leads: "Contact Requests",
+    reviews: "Reviews",
     settings: "School Settings",
     audit: "Audit Logs",
   }[state.view];
@@ -229,6 +243,7 @@ function content() {
     notifications: notificationsView(),
     accounts: accountsView(),
     leads: leadsView(),
+    reviews: reviewsView(),
     settings: settingsView(),
     audit: auditView(),
   }[state.view] || dashboard();
@@ -771,7 +786,7 @@ function authLoadingScreen() {
   return `
     <div class="auth-screen">
       <div class="auth-card">
-        <div class="brand-mark">CN</div>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <p>Loading ${school.name} portal…</p>
       </div>
     </div>
@@ -783,7 +798,7 @@ function loginScreen() {
     <div class="auth-screen">
       <form class="auth-card" onsubmit="handleLoginSubmit(event)">
         <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
-        <div class="brand-mark">CN</div>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <h1>${school.name}</h1>
         <p class="eyebrow">Sign in to your portal</p>
         ${state.authError ? `<p class="auth-error">${state.authError}</p>` : ""}
@@ -801,7 +816,7 @@ function notConfiguredScreen() {
     <div class="auth-screen">
       <div class="auth-card">
         <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
-        <div class="brand-mark">CN</div>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <h1>Almost there</h1>
         <p class="eyebrow">This portal isn't connected to a database yet</p>
         <p>${school.name} hasn't been connected to Supabase yet, so there's no sign-in to show. If you're setting this school up, follow <code>docs/deploy-vercel-supabase.md</code> to create the Supabase project, run the migrations, and add the environment variables in Vercel — then this button will take visitors to a real sign-in screen.</p>
@@ -814,7 +829,7 @@ function forcePasswordScreen() {
   return `
     <div class="auth-screen">
       <form class="auth-card" onsubmit="handleForcePasswordSubmit(event)">
-        <div class="brand-mark">CN</div>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <h1>Set a new password</h1>
         <p class="eyebrow">First login for ${state.profile?.full_name || state.profile?.email || "your account"}</p>
         ${state.authError ? `<p class="auth-error">${state.authError}</p>` : ""}
@@ -839,6 +854,16 @@ const sampleReviews = [
     tag: "Sample review",
   },
   {
+    quote: "انتقلنا من الفوضى بين جداول البيانات والبريد الإلكتروني إلى مكان واحد يعرف فيه كل مدرّب طلابه بدقة.",
+    name: "مدير أكاديمية برمجة",
+    tag: "مراجعة تجريبية",
+  },
+  {
+    quote: "الأهالي لم يعودوا يراسلوننا لطلب كلمة مرور أبنائهم — عملية إعادة التعيين تعمل من تلقاء نفسها.",
+    name: "إدارة أكاديمية برمجة لعطلة نهاية الأسبوع",
+    tag: "مراجعة تجريبية",
+  },
+  {
     quote: "Parents stopped emailing us asking for their kid's password. The reset flow just works.",
     name: "School admin, weekend coding academy",
     tag: "Sample review",
@@ -859,13 +884,28 @@ function compareIcon(kind) {
   return `<span class="cmp-icon cmp-no" title="No">&#10005;</span>`;
 }
 
+const socialIcons = {
+  facebook: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M13.5 21v-8h2.7l.4-3.1h-3.1V8c0-.9.25-1.5 1.53-1.5H16.7V3.7C16.4 3.66 15.42 3.58 14.29 3.58c-2.36 0-3.98 1.44-3.98 4.08v2.24H7.6v3.1h2.71v8h3.19z"/></svg>`,
+  whatsapp: `<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M17.5 14.4c-.3-.15-1.75-.86-2-.96-.27-.1-.47-.15-.66.15-.2.3-.76.96-.93 1.16-.17.2-.34.22-.64.07-.3-.15-1.26-.46-2.4-1.47-.9-.8-1.5-1.78-1.67-2.08-.17-.3-.02-.46.13-.61.14-.14.3-.34.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.02-.52-.08-.15-.66-1.6-.9-2.18-.24-.58-.48-.5-.66-.5h-.56c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.87 1.22 3.07c.15.2 2.1 3.2 5.08 4.49.71.3 1.26.49 1.7.63.71.22 1.36.19 1.87.12.57-.09 1.75-.72 2-1.4.25-.7.25-1.3.17-1.4-.07-.13-.27-.2-.57-.35z"/><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12c0 1.9.52 3.68 1.44 5.2L2 22l4.94-1.4A9.94 9.94 0 0 0 12 22c5.52 0 10-4.48 10-10S17.52 2 12 2zm0 18.2a8.17 8.17 0 0 1-4.24-1.19l-.3-.18-3 .85.85-2.92-.2-.3A8.19 8.19 0 1 1 20.2 12 8.2 8.2 0 0 1 12 20.2z"/></svg>`,
+};
+
+function socialLinksHtml() {
+  const wa = (school.social.whatsapp || "").replace(/[^\d]/g, "");
+  return `
+    <a class="m-social-link" href="${school.social.facebook}" target="_blank" rel="noopener">${socialIcons.facebook}<span>Facebook</span></a>
+    <a class="m-social-link" href="https://wa.me/${wa}" target="_blank" rel="noopener">${socialIcons.whatsapp}<span>WhatsApp</span></a>
+  `;
+}
+
 function marketingScreen() {
   const notice = state.contactNotice;
+  const reviewNotice = state.reviewNotice;
+  const allReviews = [...state.publicReviews, ...sampleReviews];
   return `
     <div class="marketing">
       <header class="m-nav">
         <div class="brand">
-          <div class="brand-mark">CN</div>
+          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
           <strong>${school.name}</strong>
         </div>
         <nav class="m-nav-links" aria-label="Marketing navigation">
@@ -874,6 +914,7 @@ function marketingScreen() {
           <a href="#reviews">Reviews</a>
           <a href="#contact">Contact</a>
         </nav>
+        <div class="m-nav-social">${socialLinksHtml()}</div>
         <button class="m-login-button" onclick="beginLogin()">Login</button>
       </header>
 
@@ -921,22 +962,47 @@ function marketingScreen() {
 
       <section id="reviews" class="m-section">
         <h2>What schools say</h2>
-        <p class="m-sub"><span class="sample-tag">Sample reviews</span> — replace these with real feedback from your instructors and families.</p>
+        <p class="m-sub">${state.publicReviews.length ? "" : `<span class="sample-tag">Sample reviews</span> — `}real reviews approved by a Manager appear here alongside these starter examples.</p>
         <div class="m-cards">
-          ${sampleReviews.map((review) => `
+          ${allReviews.map((review) => `
             <article class="m-card m-review">
-              <p>&ldquo;${review.quote}&rdquo;</p>
+              ${review.tag ? `<span class="sample-tag">${review.tag}</span>` : ""}
+              <p dir="auto">&ldquo;${review.quote}&rdquo;</p>
               <strong>${review.name}</strong>
+              ${review.role_or_school ? `<span class="m-review-role">${review.role_or_school}</span>` : ""}
+              ${review.rating ? `<span class="m-review-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span>` : ""}
             </article>
           `).join("")}
         </div>
+
+        <form class="m-review-form" onsubmit="handleReviewSubmit(event)">
+          <h3>Leave a review</h3>
+          ${reviewNotice ? `<p class="${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}</p>` : ""}
+          <div class="m-review-form-grid">
+            <label>Your name<input type="text" name="name" required /></label>
+            <label>Role / school (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent at Hero Tech Academy" /></label>
+          </div>
+          <label>Rating
+            <select name="rating">
+              <option value="5">★★★★★ (5)</option>
+              <option value="4">★★★★☆ (4)</option>
+              <option value="3">★★★☆☆ (3)</option>
+              <option value="2">★★☆☆☆ (2)</option>
+              <option value="1">★☆☆☆☆ (1)</option>
+            </select>
+          </label>
+          <label>Your review<textarea name="quote" rows="3" required></textarea></label>
+          <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? "Sending…" : "Submit review"}</button>
+          <small>Reviews are checked by a Manager before they go live.</small>
+        </form>
       </section>
 
       <section id="contact" class="m-section m-contact">
         <div class="m-contact-grid">
           <div>
             <h2>Contact us</h2>
-            <p class="m-sub">Questions about setting up your school, or want a walkthrough before you commit? Send a message or request a call back.</p>
+            <p class="m-sub">Questions about setting up your school, or want a walkthrough before you commit? Send a message, request a call back, or reach us directly.</p>
+            <div class="m-contact-social">${socialLinksHtml()}</div>
           </div>
           <form class="m-contact-form" onsubmit="handleContactSubmit(event)">
             ${notice ? `<p class="${notice.type === "error" ? "auth-error" : "m-success"}">${notice.message}</p>` : ""}
@@ -952,6 +1018,7 @@ function marketingScreen() {
 
       <footer class="m-footer">
         <span>&copy; ${new Date().getFullYear()} ${school.name}</span>
+        <div class="m-footer-social">${socialLinksHtml()}</div>
         <button class="m-login-button" onclick="beginLogin()">Login</button>
       </footer>
     </div>
@@ -1034,6 +1101,75 @@ function dismissContactNotice() {
   render();
 }
 
+// Approved reviews only — anyone (even signed out) can read these under the
+// reviews table's "approved only" RLS policy; a submitted review never
+// shows here until a Manager approves it from the Reviews panel.
+async function loadPublicReviews() {
+  if (!hasSupabaseConfig()) return;
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(
+      `${base}/rest/v1/reviews?status=eq.approved&select=name,role_or_school,rating,quote&order=created_at.desc&limit=12`,
+      {
+        headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}`, Accept: "application/json" },
+      },
+    );
+    state.publicReviews = response.ok ? await response.json() : [];
+  } catch {
+    state.publicReviews = [];
+  }
+}
+
+async function handleReviewSubmit(event) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const roleOrSchool = form.roleOrSchool.value.trim();
+  const quote = form.quote.value.trim();
+  const rating = Number(form.rating.value) || 5;
+
+  if (!name || !quote) {
+    state.reviewNotice = { type: "error", message: "Please add your name and a short review." };
+    render();
+    return;
+  }
+
+  state.reviewBusy = true;
+  state.reviewNotice = null;
+  render();
+
+  try {
+    if (hasSupabaseConfig()) {
+      const base = config.supabaseUrl.replace(/\/$/, "");
+      const response = await fetch(`${base}/rest/v1/reviews`, {
+        method: "POST",
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${config.supabaseAnonKey}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify([{ name, role_or_school: roleOrSchool || null, quote, rating }]),
+      });
+      if (!response.ok) throw new Error("Could not submit your review. Please try again.");
+    } else {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    state.reviewNotice = { type: "success", message: "Thanks! Your review is in — it'll appear here once a Manager approves it." };
+    form.reset();
+  } catch (error) {
+    state.reviewNotice = { type: "error", message: error.message || "Something went wrong. Please try again." };
+  } finally {
+    state.reviewBusy = false;
+    render();
+  }
+}
+
+function dismissReviewNotice() {
+  state.reviewNotice = null;
+  render();
+}
+
 function canManageAccounts() {
   return ["Super Admin", "School Admin", "Instructor"].includes(state.role);
 }
@@ -1099,6 +1235,94 @@ function leadsView() {
       </table>
     </section>
   `;
+}
+
+function reviewsView() {
+  const reviews = state.reviewsDirectory || [];
+  const pending = reviews.filter((r) => r.status === "pending");
+  const decided = reviews.filter((r) => r.status !== "pending");
+  return `
+    <p class="hint">Reviews submitted from the homepage land here as "Pending" and never appear publicly until you approve them.</p>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Pending review</h2><span>${pending.length} waiting</span></div>
+      <table>
+        <thead><tr><th>Received</th><th>Name</th><th>Quote</th><th>Rating</th><th>Action</th></tr></thead>
+        <tbody>${pending.map(reviewRow).join("") || `<tr><td colspan="5" class="empty">Nothing pending.</td></tr>`}</tbody>
+      </table>
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Decided</h2><span>${decided.length} reviewed</span></div>
+      <table>
+        <thead><tr><th>Received</th><th>Name</th><th>Quote</th><th>Rating</th><th>Status</th></tr></thead>
+        <tbody>${
+          decided
+            .map(
+              (r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td><strong>${r.name}</strong></td><td dir="auto">${r.quote}</td><td>${"★".repeat(r.rating || 5)}</td><td>${badge(r.status === "approved" ? "Approved" : "Rejected")}</td></tr>`,
+            )
+            .join("") || `<tr><td colspan="5" class="empty">No decisions yet.</td></tr>`
+        }</tbody>
+      </table>
+    </section>
+  `;
+}
+
+function reviewRow(review) {
+  const busy = state.reviewsBusy === review.id;
+  return `
+    <tr>
+      <td>${new Date(review.created_at).toLocaleString()}</td>
+      <td><strong>${review.name}</strong>${review.role_or_school ? `<span>${review.role_or_school}</span>` : ""}</td>
+      <td dir="auto">${review.quote}</td>
+      <td>${"★".repeat(review.rating || 5)}</td>
+      <td>
+        <button onclick="setReviewStatus('${review.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Approve"}</button>
+        <button onclick="setReviewStatus('${review.id}', 'rejected')" ${busy ? "disabled" : ""}>Reject</button>
+      </td>
+    </tr>
+  `;
+}
+
+async function loadReviewsDirectory() {
+  if (!hasSupabaseConfig() || !state.session) return;
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  try {
+    const response = await fetch(
+      `${base}/rest/v1/reviews?select=id,name,role_or_school,rating,quote,status,created_at&order=created_at.desc`,
+      {
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${state.session.access_token}`,
+          Accept: "application/json",
+        },
+      },
+    );
+    state.reviewsDirectory = response.ok ? await response.json() : [];
+  } catch {
+    state.reviewsDirectory = [];
+  }
+}
+
+async function setReviewStatus(id, status) {
+  if (!state.session) return;
+  state.reviewsBusy = id;
+  renderContentOnly();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    await fetch(`${base}/rest/v1/reviews?id=eq.${id}`, {
+      method: "PATCH",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ status }),
+    });
+    await loadReviewsDirectory();
+  } finally {
+    state.reviewsBusy = null;
+    renderContentOnly();
+  }
 }
 
 function accountRow({ key, role, name, email, refId, account }) {
@@ -1402,6 +1626,9 @@ window.beginLogin = beginLogin;
 window.backToMarketing = backToMarketing;
 window.handleContactSubmit = handleContactSubmit;
 window.dismissContactNotice = dismissContactNotice;
+window.handleReviewSubmit = handleReviewSubmit;
+window.dismissReviewNotice = dismissReviewNotice;
+window.setReviewStatus = setReviewStatus;
 window.handleLoginSubmit = handleLoginSubmit;
 window.handleSignOut = handleSignOut;
 window.handleForcePasswordSubmit = handleForcePasswordSubmit;
@@ -1411,6 +1638,9 @@ window.dismissAccountsNotice = dismissAccountsNotice;
 
 async function initApp() {
   render();
+  loadPublicReviews().then(() => {
+    if (state.authMode === "marketing") render();
+  });
 
   if (!hasSupabaseConfig()) {
     state.authMode = "marketing";

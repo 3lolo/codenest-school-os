@@ -81,6 +81,14 @@ test("only managers can access contact requests (leads)", () => {
   assert.equal(canAccessModule("Student", "leads"), false);
 });
 
+test("only managers can access the reviews moderation module", () => {
+  assert.equal(canAccessModule("Super Admin", "reviews"), true);
+  assert.equal(canAccessModule("School Admin", "reviews"), true);
+  assert.equal(canAccessModule("Instructor", "reviews"), false);
+  assert.equal(canAccessModule("Student", "reviews"), false);
+  assert.equal(canAccessModule("Parent", "reviews"), false);
+});
+
 test("roleLabel presents Super Admin and School Admin as Manager, leaves other roles alone", () => {
   assert.equal(roleLabel("Super Admin"), "Manager");
   assert.equal(roleLabel("School Admin"), "Manager");
@@ -149,6 +157,17 @@ test("contact requests migration only allows public insert, never public read/up
   const sql = await readFile(new URL("../supabase/migrations/0004_contact_requests.sql", import.meta.url), "utf8");
   assert.match(sql, /enable row level security/i);
   assert.match(sql, /for insert/i);
+  assert.match(sql, /public\.is_admin\(\)/);
+  assert.doesNotMatch(sql, /for select\s+using\s*\(\s*true\s*\)/i);
+  assert.doesNotMatch(sql, /for update\s+using\s*\(\s*true\s*\)/i);
+});
+
+test("reviews migration only allows public insert of pending rows, never public read of pending/rejected", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/0005_reviews.sql", import.meta.url), "utf8");
+  assert.match(sql, /enable row level security/i);
+  assert.match(sql, /for insert/i);
+  assert.match(sql, /status = 'pending'/);
+  assert.match(sql, /status = 'approved'/);
   assert.match(sql, /public\.is_admin\(\)/);
   assert.doesNotMatch(sql, /for select\s+using\s*\(\s*true\s*\)/i);
   assert.doesNotMatch(sql, /for update\s+using\s*\(\s*true\s*\)/i);

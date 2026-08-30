@@ -1,4 +1,4 @@
-# CodeNest School OS
+# Hero Tech Academy
 
 Coding school management platform for Vercel and Supabase, with a public
 marketing homepage and real per-person login: every Manager, Instructor,
@@ -22,17 +22,27 @@ account types issued from Accounts & Logins.)
 
 Opening the site now shows a public homepage first — hero, a "who it's
 for" breakdown of the three account types, a sample comparison section, a
-sample reviews section, and a **Contact us / Request a call** form — with
-a **Login** button in the header that takes visitors to the real sign-in
-screen. Everything below is a swap-in-your-own-content template:
+reviews section, a **Contact us / Request a call** form, and links to the
+school's Facebook page and WhatsApp — with a **Login** button in the
+header that takes visitors to the real sign-in screen.
 
-- `sampleReviews` and `compareRows` in `src/app.js` — replace with real
-  testimonials and your actual competitive comparison whenever you have
-  them.
+- `sampleReviews` and `compareRows` in `src/app.js` hold clearly-labeled
+  starter content ("Sample review" tag, marked as such) — replace with
+  your own competitive comparison whenever you have one.
+- Real reviews: any visitor can submit a review from the **Leave a
+  review** form on the homepage. Submissions land as `pending` in a
+  Supabase table (`reviews`, see migration `0005`) and are invisible to
+  the public until a Manager approves them from the in-app **Reviews**
+  panel. Approved reviews then appear on the homepage alongside the
+  sample ones — English and Arabic both render correctly (`dir="auto"`).
+- Social links: `school.social.facebook` and `school.social.whatsapp` in
+  `src/app.js` drive the Facebook/WhatsApp links shown in the nav,
+  contact section, and footer.
 - The contact form inserts into a Supabase table (`contact_requests`, see
   migration `0004`) so submissions show up for Managers in the
   **Contact Requests** panel inside the app. Without Supabase configured,
-  it just shows a local "thanks" message.
+  both the contact form and the review form just show a local "thanks"
+  message instead of failing.
 
 ## Local Checks
 
@@ -60,6 +70,7 @@ For real school data with real logins, also run, in order:
 3. `supabase/migrations/0002_production_rls.sql`
 4. `supabase/migrations/0003_auth_accounts.sql`
 5. `supabase/migrations/0004_contact_requests.sql`
+6. `supabase/migrations/0005_reviews.sql`
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`
 so someone can sign in and start issuing Instructor/Student credentials.

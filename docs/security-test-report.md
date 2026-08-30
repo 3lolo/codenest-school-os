@@ -4,7 +4,7 @@ Date: 2026-08-30
 
 ## Result
 
-Passed: 19 / 19 automated tests.
+Passed: 21 / 21 automated tests.
 
 Commands run:
 
@@ -16,12 +16,20 @@ Commands run:
 - `node --check api/create-account.js`
 - `node --check api/_lib/password.js`
 - `node --check build.mjs`
-- Headless-browser smoke test (Playwright) of: the marketing homepage
-  rendering with no JS errors; clicking **Login** without Supabase
-  configured showing the "not connected yet" screen (confirming there is
-  no demo dashboard, no fake sample data, and no role switcher anywhere in
-  the app); "Back to homepage" returning to the marketing page; and
-  submitting the Contact us form.
+- Headless-browser smoke test (Playwright) of: the Hero Tech Academy
+  marketing homepage rendering with no JS/console errors and the full-width
+  layout (nav, hero, reviews, contact, footer all spanning the page rather
+  than being squeezed into the dashboard's sidebar column); the Facebook
+  and WhatsApp links in the nav, contact section, and footer resolving to
+  the correct URLs (including the WhatsApp `wa.me` link built from the
+  configured phone number); the reviews section rendering both English and
+  Arabic sample reviews with correct right-to-left text direction; the
+  "Leave a review" form submitting successfully and showing the pending-
+  approval message when Supabase isn't configured; clicking **Login**
+  without Supabase configured showing the "not connected yet" screen
+  (confirming there is no demo dashboard, no fake sample data, and no role
+  switcher anywhere in the app); "Back to homepage" returning to the
+  marketing page; and submitting the Contact us form.
 
 ## What Was Tested
 
@@ -33,6 +41,8 @@ Commands run:
 - Managers (Super Admin, School Admin) and Instructors can reach Accounts
   & Logins; Students and Parents cannot.
 - Only Managers can reach the Contact Requests (leads) module.
+- Only Managers can reach the Reviews moderation module; Instructors,
+  Students, and Parents cannot.
 - `roleLabel()` presents Super Admin/School Admin as "Manager" in the UI
   without changing the underlying role values RLS depends on.
 - `canManageAnyAccounts()` / `issuableRolesFor()`: Managers can issue
@@ -46,6 +56,10 @@ Commands run:
   and avoids public read-all policies.
 - Contact Requests migration (`0004`) only allows public **insert** (for
   the homepage form) — never public read or update.
+- Reviews migration (`0005`) only allows public **insert of `pending`
+  rows** and public **read of `approved` rows** — pending/rejected reviews
+  are never publicly readable, and only a Manager can change a review's
+  status.
 - `api/create-account.js` re-derives the caller's role from their own
   authenticated profile row (never trusts a role claimed by the browser),
   rejects an Instructor issuing anything but a Student account, and
@@ -83,6 +97,11 @@ Database:
   homepage form), with basic non-empty/length checks in the insert
   policy itself; only `public.is_admin()` (a Manager) can select or
   update rows.
+- `reviews` accepts anonymous **inserts of `pending` rows only** (the
+  public "Leave a review" form), with non-empty/length checks in the
+  insert policy itself. Anonymous/authenticated reads are restricted to
+  `status = 'approved'`; `public.is_admin()` (a Manager) can additionally
+  select all rows (any status) and update a row's status.
 
 Account issuance:
 
@@ -102,7 +121,7 @@ Account issuance:
 
 The first Supabase migration is for demo publishing with sample public
 data. For real school data, run the production RLS migration (`0002`),
-the accounts migration (`0003`), and the contact-requests migration
-(`0004`), and require Supabase Auth before adding private student or
-parent records, issuing real logins, or collecting real contact-form
-submissions.
+the accounts migration (`0003`), the contact-requests migration (`0004`),
+and the reviews migration (`0005`), and require Supabase Auth before
+adding private student or parent records, issuing real logins, or
+collecting real contact-form or review submissions.
