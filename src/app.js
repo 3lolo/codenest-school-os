@@ -1,9 +1,7 @@
 import {
   canAccessModule,
   filterStudentsForViewer,
-  permissions,
   roleLabel,
-  roles,
   safeSearchRowsForViewer,
   visibleModulesForRole,
 } from "./security.js";
@@ -21,7 +19,7 @@ const state = {
   role: "Super Admin",
   view: "dashboard",
   query: "",
-  authMode: "checking", // "checking" | "marketing" | "demo" | "signed-out" | "force-password" | "signed-in"
+  authMode: "checking", // "checking" | "marketing" | "not-configured" | "signed-out" | "force-password" | "signed-in"
   authError: "",
   authBusy: false,
   session: null,
@@ -37,8 +35,8 @@ const state = {
 
 const config = window.CODENEST_CONFIG || {};
 const dataSource = {
-  label: "Demo data",
-  status: "Using built-in sample data",
+  label: "Not connected",
+  status: "Connect Supabase to load your school's data.",
   error: "",
 };
 
@@ -58,9 +56,13 @@ const navItems = [
   ["audit", "Audit", "shield"],
 ];
 
+// Production defaults. Nothing here is sample/demo content — every list
+// starts empty and is populated from Supabase once someone signs in.
+// `school` holds the editable defaults for a brand-new deployment before
+// a Manager opens Settings and changes them.
 let school = {
   name: "CodeNest Academy",
-  portalUrl: "https://portal.codenest.school",
+  portalUrl: "",
   settings: {
     absenceThreshold: 3,
     parentAssignmentEmails: true,
@@ -70,130 +72,16 @@ let school = {
 };
 
 let people = {
-  students: [
-    {
-      id: "STU-1001",
-      first: "Maya",
-      last: "Hassan",
-      email: "maya.hassan@student.codenest.school",
-      phone: "+20 100 233 9911",
-      dob: "2012-04-18",
-      status: "Active",
-      level: "Python Foundations",
-      family: "Hassan Family",
-      parent: "Nour Hassan",
-      classId: "CLS-PY-A",
-      progress: 84,
-      attendance: 94,
-      avgGrade: 91,
-      absences: 1,
-      late: 2,
-      notes: "Strong project instincts; benefits from stretch debugging tasks.",
-    },
-    {
-      id: "STU-1002",
-      first: "Omar",
-      last: "Saleh",
-      email: "omar.saleh@student.codenest.school",
-      phone: "+20 111 802 4112",
-      dob: "2011-09-07",
-      status: "Active",
-      level: "Web Apps",
-      family: "Saleh Family",
-      parent: "Dina Saleh",
-      classId: "CLS-WEB-B",
-      progress: 71,
-      attendance: 87,
-      avgGrade: 82,
-      absences: 3,
-      late: 1,
-      notes: "Needs follow-up on async JavaScript and project pacing.",
-    },
-    {
-      id: "STU-1003",
-      first: "Lina",
-      last: "Farouk",
-      email: "lina.farouk@student.codenest.school",
-      phone: "+20 122 918 7044",
-      dob: "2013-01-26",
-      status: "Active",
-      level: "Scratch to Python",
-      family: "Farouk Family",
-      parent: "Karim Farouk",
-      classId: "CLS-SC-C",
-      progress: 62,
-      attendance: 76,
-      avgGrade: 78,
-      absences: 4,
-      late: 3,
-      notes: "Attendance alert triggered; parent check-in recommended.",
-    },
-    {
-      id: "STU-1004",
-      first: "Youssef",
-      last: "Adel",
-      email: "youssef.adel@student.codenest.school",
-      phone: "+20 101 481 6110",
-      dob: "2010-12-02",
-      status: "Paused",
-      level: "Robotics",
-      family: "Adel Family",
-      parent: "Salma Adel",
-      classId: "CLS-ROB-A",
-      progress: 48,
-      attendance: 81,
-      avgGrade: 74,
-      absences: 2,
-      late: 0,
-      notes: "Paused for exam month; resume plan needed.",
-    },
-  ],
-  parents: [
-    { name: "Nour Hassan", email: "nour.hassan@example.com", children: ["Maya Hassan"], preference: "Email + in-app", status: "Active" },
-    { name: "Dina Saleh", email: "dina.saleh@example.com", children: ["Omar Saleh"], preference: "Email", status: "Invited" },
-    { name: "Karim Farouk", email: "karim.farouk@example.com", children: ["Lina Farouk"], preference: "Email + SMS", status: "Active" },
-    { name: "Salma Adel", email: "salma.adel@example.com", children: ["Youssef Adel"], preference: "Email", status: "Active" },
-  ],
-  instructors: [
-    { name: "Amina Nabil", email: "amina@codenest.school", classes: ["Python Beginners - Group A"], status: "Active" },
-    { name: "Mostafa Kamal", email: "mostafa@codenest.school", classes: ["Web Apps - Group B"], status: "Active" },
-    { name: "Heba Sami", email: "heba@codenest.school", classes: ["Scratch Creators - Group C"], status: "Active" },
-  ],
+  students: [],
+  parents: [],
+  instructors: [],
 };
 
-let classes = [
-  { id: "CLS-PY-A", name: "Python Beginners - Group A", course: "Python Programming", instructor: "Amina Nabil", students: 14, schedule: "Mon/Wed 5:00 PM", room: "Lab 2", status: "Active", completion: 58 },
-  { id: "CLS-WEB-B", name: "Web Apps - Group B", course: "Frontend Web Apps", instructor: "Mostafa Kamal", students: 12, schedule: "Tue/Thu 6:00 PM", room: "Lab 1", status: "Active", completion: 46 },
-  { id: "CLS-SC-C", name: "Scratch Creators - Group C", course: "Scratch to Python", instructor: "Heba Sami", students: 16, schedule: "Sat 11:00 AM", room: "Studio", status: "Active", completion: 32 },
-  { id: "CLS-ROB-A", name: "Robotics - Group A", course: "Robotics Lab", instructor: "Amina Nabil", students: 8, schedule: "Fri 2:00 PM", room: "Maker Room", status: "Paused", completion: 41 },
-];
-
-let assignments = [
-  { title: "Build a Number Guessing Game", course: "Python Programming", className: "Python Beginners - Group A", due: "2026-08-28", status: "Published", submissions: 9, total: 14, maxGrade: 100, difficulty: "Core" },
-  { title: "Responsive Portfolio Page", course: "Frontend Web Apps", className: "Web Apps - Group B", due: "2026-08-26", status: "Published", submissions: 5, total: 12, maxGrade: 100, difficulty: "Stretch" },
-  { title: "Sprite Storyboard", course: "Scratch to Python", className: "Scratch Creators - Group C", due: "2026-08-30", status: "Draft", submissions: 0, total: 16, maxGrade: 50, difficulty: "Intro" },
-];
-
-let communications = [
-  { type: "Assignment", recipient: "Python Beginners - Group A", subject: "New assignment published", time: "Today 10:15", status: "Delivered" },
-  { type: "Attendance", recipient: "Karim Farouk", subject: "Attendance warning for Lina Farouk", time: "Yesterday 18:30", status: "Opened" },
-  { type: "Announcement", recipient: "All families", subject: "September schedule update", time: "Aug 21, 2026", status: "Queued" },
-  { type: "Welcome", recipient: "Dina Saleh", subject: "Parent portal activation", time: "Aug 20, 2026", status: "Failed retrying" },
-];
-
-let auditLogs = [
-  { actor: "Sara Admin", action: "student.created", entity: "STU-1004", time: "2026-08-23 12:13", meta: "Activation link generated" },
-  { actor: "Amina Nabil", action: "assignment.published", entity: "Build a Number Guessing Game", time: "2026-08-23 10:14", meta: "Parent notifications enabled" },
-  { actor: "System", action: "notification.retry_scheduled", entity: "email-log-8831", time: "2026-08-22 09:42", meta: "Attempt 2 of 5" },
-  { actor: "Mostafa Kamal", action: "grade.updated", entity: "Omar Saleh", time: "2026-08-21 17:20", meta: "Score changed from 78 to 82" },
-];
-
-let notifications = [
-  { type: "Attendance warning", title: "Lina Farouk reached the absence threshold", time: "12 min ago", unread: true },
-  { type: "Submission", title: "5 portfolios are ready for grading", time: "46 min ago", unread: true },
-  { type: "Payment", title: "3 invoices are overdue", time: "2 hr ago", unread: false },
-  { type: "System", title: "Email retry queue has 1 failed delivery", time: "Yesterday", unread: false },
-];
+let classes = [];
+let assignments = [];
+let communications = [];
+let auditLogs = [];
+let notifications = [];
 
 const icons = {
   grid: "▦",
@@ -226,13 +114,6 @@ function navigate(view) {
   }
 }
 
-function setRole(role) {
-  if (state.authMode !== "demo") return;
-  state.role = role;
-  if (!can(state.view)) state.view = "dashboard";
-  render();
-}
-
 function setSearch(value) {
   state.query = value.toLowerCase();
   renderContentOnly();
@@ -244,9 +125,9 @@ function currentViewer() {
   }
   return {
     role: state.role,
-    studentId: "STU-1001",
-    childStudentIds: ["STU-1001"],
-    classIds: ["CLS-PY-A", "CLS-ROB-A"],
+    studentId: null,
+    childStudentIds: [],
+    classIds: [],
   };
 }
 
@@ -303,14 +184,6 @@ function shell() {
           <span>${icons.bell}</span>
           ${unread ? `<b>${unread}</b>` : ""}
         </button>
-        ${state.authMode === "demo" ? `
-        <label class="role-switcher">
-          <span>Preview role</span>
-          <select onchange="setRole(this.value)">
-            ${roles.map((role) => `<option value="${role}" ${role === state.role ? "selected" : ""}>${role === "Super Admin" ? "Manager (Super Admin)" : role === "School Admin" ? "Manager (School Admin)" : role}</option>`).join("")}
-          </select>
-        </label>
-        ` : `
         <div class="account-chip">
           <div>
             <strong>${state.profile?.full_name || state.session?.user?.email || roleLabel(state.role)}</strong>
@@ -318,7 +191,6 @@ function shell() {
           </div>
           <button onclick="handleSignOut()">Sign out</button>
         </div>
-        `}
       </header>
       <section id="content" class="content">${content()}</section>
     </main>
@@ -369,32 +241,58 @@ function dashboard() {
   return adminDashboard();
 }
 
+function average(numbers) {
+  if (!numbers.length) return 0;
+  return Math.round(numbers.reduce((sum, n) => sum + n, 0) / numbers.length);
+}
+
+function computeActionItems() {
+  const items = [];
+  const threshold = school.settings.absenceThreshold;
+
+  people.students
+    .filter((s) => s.absences >= threshold)
+    .forEach((s) => items.push(action("High", `${fullName(s)} reached the absence threshold`, "Notify family and schedule a check-in")));
+
+  assignments
+    .filter((a) => a.total - a.submissions > 0)
+    .forEach((a) => items.push(action("Medium", `${a.total - a.submissions} ${a.className} submissions are ungraded`, "Instructor follow-up")));
+
+  classes
+    .filter((c) => c.status === "Paused")
+    .forEach((c) => items.push(action("Low", `${c.name} is paused`, "Confirm a resume date")));
+
+  return items.join("") || `<p class="empty">No action items right now.</p>`;
+}
+
 function adminDashboard() {
   const activeStudents = people.students.filter((s) => s.status === "Active").length;
-  const pending = assignments.reduce((sum, a) => sum + (a.total - a.submissions), 0);
+  const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
+  const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
+  const avgAttendance = average(people.students.map((s) => s.attendance));
+  const avgCompletion = average(classes.map((c) => c.completion));
+  const avgGrade = average(people.students.map((s) => s.avgGrade));
+  const retention = people.students.length ? Math.round((activeStudents / people.students.length) * 100) : 0;
+
   return `
     <div class="metric-grid">
-      ${metric("Total students", people.students.length, "+2 this week")}
-      ${metric("Active students", activeStudents, "94% retained")}
-      ${metric("Active classes", classes.filter((c) => c.status === "Active").length, "4 labs scheduled")}
+      ${metric("Total students", people.students.length, people.students.length ? "Across all classes" : "No students yet")}
+      ${metric("Active students", activeStudents, people.students.length ? `${retention}% of total` : "—")}
+      ${metric("Active classes", classes.filter((c) => c.status === "Active").length, `${classes.filter((c) => c.status === "Paused").length} paused`)}
       ${metric("Pending submissions", pending, "Needs grading")}
-      ${metric("Attendance today", "89%", "3 absence alerts")}
-      ${metric("Outstanding payments", "$2,420", "6 family accounts")}
+      ${metric("Avg. attendance", people.students.length ? `${avgAttendance}%` : "—", `${attendanceAlerts} absence alert${attendanceAlerts === 1 ? "" : "s"}`)}
+      ${metric("Instructors", people.instructors.length, "On staff")}
     </div>
     <div class="two-col">
       <section class="panel">
-        <div class="panel-head"><h2>Action Queue</h2><button>Review all</button></div>
-        ${action("High", "Lina Farouk attendance threshold reached", "Notify parent and schedule check-in")}
-        ${action("Medium", "5 Web Apps submissions are ungraded", "Instructor follow-up")}
-        ${action("Medium", "Parent activation email failed", "Retry from email queue")}
-        ${action("Low", "Robotics class paused", "Confirm September resume date")}
+        <div class="panel-head"><h2>Action Queue</h2><button onclick="navigate('reports')">Review all</button></div>
+        ${computeActionItems()}
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>Performance Overview</h2><button>Export</button></div>
-        ${chartRow("Attendance", 89)}
-        ${chartRow("Assignment completion", 66)}
-        ${chartRow("Average grade", 83)}
-        ${chartRow("Parent portal activation", 75)}
+        <div class="panel-head"><h2>Performance Overview</h2><button onclick="navigate('reports')">Export</button></div>
+        ${chartRow("Attendance", avgAttendance)}
+        ${chartRow("Assignment completion", avgCompletion)}
+        ${chartRow("Average grade", avgGrade)}
       </section>
     </div>
     <div class="two-col">
@@ -404,53 +302,79 @@ function adminDashboard() {
   `;
 }
 
+function emptyState(message) {
+  return `<section class="panel"><p class="empty">${message}</p></section>`;
+}
+
 function instructorDashboard() {
+  // classes / people.students / assignments are already scoped to this
+  // instructor's own classes by Supabase row-level security (see
+  // supabase/migrations/0002_production_rls.sql) — no extra client-side
+  // filtering is needed here.
+  const activeStudents = people.students.filter((s) => s.status === "Active").length;
+  const toGrade = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
+  const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
   return `
     <div class="metric-grid">
-      ${metric("Assigned classes", 2, "Python + Robotics")}
-      ${metric("Students", 22, "18 active")}
-      ${metric("To grade", 8, "Due this week")}
-      ${metric("Attendance alerts", 2, "Follow-up needed")}
+      ${metric("Assigned classes", classes.length, classes.map((c) => c.course).join(", ") || "None assigned yet")}
+      ${metric("Students", people.students.length, `${activeStudents} active`)}
+      ${metric("To grade", toGrade, "Ungraded submissions")}
+      ${metric("Attendance alerts", attendanceAlerts, "Follow-up needed")}
     </div>
     <div class="two-col">
       ${assignmentPanel()}
       <section class="panel">
-        <div class="panel-head"><h2>Today</h2><button>Take attendance</button></div>
-        ${classes.slice(0, 2).map((item) => `<div class="class-row"><strong>${item.name}</strong><span>${item.schedule} · ${item.room}</span>${pct(item.completion)}</div>`).join("")}
+        <div class="panel-head"><h2>Today</h2><button onclick="navigate('attendance')">Take attendance</button></div>
+        ${
+          classes.length
+            ? classes.slice(0, 4).map((item) => `<div class="class-row"><strong>${item.name}</strong><span>${item.schedule} · ${item.room}</span>${pct(item.completion)}</div>`).join("")
+            : `<p class="empty">No classes assigned yet.</p>`
+        }
       </section>
     </div>
   `;
 }
 
 function studentDashboard() {
+  // Row-level security limits `people.students` to exactly this student's
+  // own record once signed in through Supabase.
   const student = people.students[0];
+  if (!student) return emptyState("Your student record hasn't been linked yet. Ask your school for help.");
+  const openAssignments = assignments.filter((a) => a.status === "Published").length;
   return `
     <div class="profile-hero">
       <div class="avatar">${student.first[0]}${student.last[0]}</div>
       <div><p class="eyebrow">Student Portal</p><h2>${fullName(student)}</h2><span>${student.level} · ${student.email}</span></div>
     </div>
     <div class="metric-grid">
-      ${metric("Progress", `${student.progress}%`, "On track")}
-      ${metric("Attendance", `${student.attendance}%`, "1 absence")}
-      ${metric("Average grade", `${student.avgGrade}%`, "Strong")}
-      ${metric("Open assignments", 2, "1 due soon")}
+      ${metric("Progress", `${student.progress}%`, "Keep it up")}
+      ${metric("Attendance", `${student.attendance}%`, `${student.absences} absence${student.absences === 1 ? "" : "s"}`)}
+      ${metric("Average grade", `${student.avgGrade}%`, "Latest grade")}
+      ${metric("Open assignments", openAssignments, "Published")}
     </div>
     ${assignmentPanel()}
   `;
 }
 
 function parentDashboard() {
-  const child = people.students[0];
+  // Row-level security limits `people.students` to this parent's linked
+  // children (see parent_student_links / can_view_student).
+  const children = people.students;
+  const child = children[0];
+  if (!child) return emptyState("No children are linked to your account yet. Ask your school to link them.");
+  const parentName = state.profile?.full_name || "Parent";
+  const initials = parentName.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase() || "P";
+  const openAssignments = assignments.filter((a) => a.status === "Published").length;
   return `
     <div class="profile-hero">
-      <div class="avatar">NH</div>
-      <div><p class="eyebrow">Parent Portal</p><h2>Nour Hassan</h2><span>Viewing linked child: ${fullName(child)}</span></div>
+      <div class="avatar">${initials}</div>
+      <div><p class="eyebrow">Parent Portal</p><h2>${parentName}</h2><span>Viewing linked child: ${fullName(child)}${children.length > 1 ? ` (+${children.length - 1} more)` : ""}</span></div>
     </div>
     <div class="metric-grid">
       ${metric("Child attendance", `${child.attendance}%`, "Healthy")}
       ${metric("Average grade", `${child.avgGrade}%`, "Latest grade published")}
-      ${metric("Assignments", "2 open", "1 due Aug 28")}
-      ${metric("Messages", "1 unread", "Instructor note")}
+      ${metric("Assignments", `${openAssignments} open`, "Published")}
+      ${metric("Messages", communications.length, "In communication history")}
     </div>
     <div class="two-col">${studentProfile(child)}${communicationTimeline()}</div>
   `;
@@ -469,7 +393,7 @@ function chartRow(label, value) {
 }
 
 function recentStudents() {
-  return `<section class="panel"><div class="panel-head"><h2>Recent Students</h2><button onclick="navigate('students')">Open</button></div>${people.students.map(studentCard).join("")}</section>`;
+  return `<section class="panel"><div class="panel-head"><h2>Recent Students</h2><button onclick="navigate('students')">Open</button></div>${people.students.map(studentCard).join("") || `<p class="empty">No students yet.</p>`}</section>`;
 }
 
 function studentCard(student) {
@@ -503,12 +427,13 @@ function students() {
           </tbody>
         </table>
       </section>
-      ${studentProfile(list[0])}
+      ${list.length ? studentProfile(list[0]) : `<section class="panel"><p class="empty">No students to show yet.</p></section>`}
     </div>
   `;
 }
 
 function studentProfile(student) {
+  if (!student) return `<section class="panel"><p class="empty">No student selected.</p></section>`;
   return `
     <section class="panel profile">
       <div class="profile-hero compact"><div class="avatar">${student.first[0]}${student.last[0]}</div><div><h2>${fullName(student)}</h2><span>${student.id} · ${student.status}</span></div></div>
@@ -616,13 +541,20 @@ function communicationTimeline() {
 }
 
 function reportsView() {
+  const activeStudents = people.students.filter((s) => s.status === "Active").length;
+  const pausedStudents = people.students.filter((s) => s.status === "Paused").length;
+  const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
+  const lateArrivals = people.students.reduce((sum, s) => sum + (s.late || 0), 0);
+  const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
+  const unreadNotifications = notifications.filter((n) => n.unread).length;
+
   return `
     <div class="toolbar"><button>Export CSV</button><button>Export PDF</button><button>Schedule report</button></div>
     <div class="report-grid">
-      <section class="panel">${reportBlock("Enrollment", [["Active", 3], ["Paused", 1], ["New this month", 2]])}</section>
-      <section class="panel">${reportBlock("Attendance", [["Average", "89%"], ["At risk", 2], ["Late arrivals", 6]])}</section>
-      <section class="panel">${reportBlock("Academic", [["Completion", "66%"], ["Average grade", "83%"], ["Ungraded", 8]])}</section>
-      <section class="panel">${reportBlock("Notifications", [["Sent", 184], ["Failed", 1], ["Open rate", "72%"]])}</section>
+      <section class="panel">${reportBlock("Enrollment", [["Active", activeStudents], ["Paused", pausedStudents], ["Total", people.students.length]])}</section>
+      <section class="panel">${reportBlock("Attendance", [["Average", `${average(people.students.map((s) => s.attendance))}%`], ["At risk", attendanceAlerts], ["Late arrivals", lateArrivals]])}</section>
+      <section class="panel">${reportBlock("Academic", [["Completion", `${average(classes.map((c) => c.completion))}%`], ["Average grade", `${average(people.students.map((s) => s.avgGrade))}%`], ["Ungraded", pending]])}</section>
+      <section class="panel">${reportBlock("Notifications", [["Total", notifications.length], ["Unread", unreadNotifications], ["Read", notifications.length - unreadNotifications]])}</section>
     </div>
   `;
 }
@@ -829,6 +761,7 @@ function render() {
 function appShell() {
   if (state.authMode === "checking") return authLoadingScreen();
   if (state.authMode === "marketing") return marketingScreen();
+  if (state.authMode === "not-configured") return notConfiguredScreen();
   if (state.authMode === "signed-out") return loginScreen();
   if (state.authMode === "force-password") return forcePasswordScreen();
   return shell();
@@ -859,6 +792,20 @@ function loginScreen() {
         <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? "Signing in…" : "Sign in"}</button>
         <small>Lost your credentials? Ask your manager or instructor to issue or reset them from Accounts &amp; Logins.</small>
       </form>
+    </div>
+  `;
+}
+
+function notConfiguredScreen() {
+  return `
+    <div class="auth-screen">
+      <div class="auth-card">
+        <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
+        <div class="brand-mark">CN</div>
+        <h1>Almost there</h1>
+        <p class="eyebrow">This portal isn't connected to a database yet</p>
+        <p>${school.name} hasn't been connected to Supabase yet, so there's no sign-in to show. If you're setting this school up, follow <code>docs/deploy-vercel-supabase.md</code> to create the Supabase project, run the migrations, and add the environment variables in Vercel — then this button will take visitors to a real sign-in screen.</p>
+      </div>
     </div>
   `;
 }
@@ -1012,7 +959,7 @@ function marketingScreen() {
 }
 
 function beginLogin() {
-  state.authMode = hasSupabaseConfig() ? "signed-out" : "demo";
+  state.authMode = hasSupabaseConfig() ? "signed-out" : "not-configured";
   state.authError = "";
   state.view = "dashboard";
   render();
@@ -1088,21 +1035,11 @@ function dismissContactNotice() {
 }
 
 function canManageAccounts() {
-  return ["Super Admin", "School Admin", "Instructor"].includes(state.role) && state.authMode !== "demo";
+  return ["Super Admin", "School Admin", "Instructor"].includes(state.role);
 }
 
 function accountsView() {
   const isInstructor = state.role === "Instructor";
-
-  if (state.authMode === "demo") {
-    return `
-      <section class="panel">
-        <div class="panel-head"><h2>Accounts &amp; Logins</h2></div>
-        <p>Connect Supabase (see <code>docs/deploy-vercel-supabase.md</code>) to issue a real username and password for every instructor and student. Managers can issue Instructor and Student logins; Instructors can issue Student logins for their own classes. This panel activates once the app is signed in through Supabase instead of the preview role switcher.</p>
-      </section>
-    `;
-  }
-
   const directory = state.accountsDirectory;
   const accountFor = (kind, refId) =>
     directory?.find((row) => (kind === "Student" ? row.student_id === refId : row.instructor_name === refId));
@@ -1146,15 +1083,6 @@ function accountsView() {
 }
 
 function leadsView() {
-  if (state.authMode === "demo") {
-    return `
-      <section class="panel">
-        <div class="panel-head"><h2>Contact Requests</h2></div>
-        <p>Connect Supabase to collect "Contact us" and "Request a call" submissions from your public marketing page here.</p>
-      </section>
-    `;
-  }
-
   const leads = state.leadsDirectory || [];
   return `
     <section class="panel table-panel">
@@ -1469,7 +1397,6 @@ async function handleForcePasswordSubmit(event) {
 }
 
 window.navigate = navigate;
-window.setRole = setRole;
 window.setSearch = setSearch;
 window.beginLogin = beginLogin;
 window.backToMarketing = backToMarketing;

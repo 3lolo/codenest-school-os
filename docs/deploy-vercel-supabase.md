@@ -41,22 +41,32 @@ just needs to contain `package.json`, `vercel.json`, `index.html`, `src/`,
 
 ## 2. Create the Supabase Project
 
+For a real, final deployment (no demo/sample data), run these — **in this
+exact order**, and do **not** run `supabase/seed.sql` (that file only
+exists for local experimentation and inserts fictional students):
+
 1. Open Supabase and create a new project.
 2. Go to SQL Editor.
-3. For a quick look with sample public data only, run
-   `supabase/migrations/0001_dashboard_foundation.sql`, then
-   `supabase/seed.sql`, and stop here for now.
-4. For a real school with real per-person logins (recommended before you
-   invite anyone), also run, **in this exact order**:
-   - `supabase/migrations/0002_production_rls.sql`
-   - `supabase/migrations/0003_auth_accounts.sql`
-   - `supabase/migrations/0004_contact_requests.sql`
-5. Go to Project Settings -> API.
-6. Copy:
+3. Run `supabase/migrations/0001_dashboard_foundation.sql` (creates the
+   tables — its own "public read" policies get replaced in the next step).
+4. Run `supabase/migrations/0002_production_rls.sql` (real row-level
+   security).
+5. Run `supabase/migrations/0003_auth_accounts.sql` (per-person Supabase
+   Auth logins).
+6. Run `supabase/migrations/0004_contact_requests.sql` (the homepage's
+   Contact us / Request a call form).
+7. Go to Project Settings -> API.
+8. Copy:
    - Project URL
    - anon public key
    - `service_role` secret key (Project Settings -> API -> Project API
      keys). Keep this one secret — it is only ever used server-side.
+
+(If you only want a quick, throwaway look at the UI with fabricated
+sample data, you can instead run only `0001` and `supabase/seed.sql` and
+skip 0002-0004 — but that isn't the final/production setup: there is no
+demo mode, so with Supabase configured but no accounts migration, the app
+shows a real sign-in form with nothing to sign in to yet.)
 
 ## 3. Deploy to Vercel
 
@@ -88,13 +98,13 @@ Then click Deploy.
 ## 5. Confirm It Is Connected
 
 Open the deployed site. You should land on the marketing homepage; click
-**Login**. You should reach a real sign-in screen (not the demo role
-switcher) once migrations 0002-0004 have been run and the environment
-variables above are set.
+**Login**. You should reach a real sign-in screen once migrations
+0002-0004 have been run and the environment variables above are set.
 
-If Supabase is not configured, or migrations 0002-0004 haven't been run
-yet, clicking **Login** drops straight into demo/preview mode using
-built-in sample data and the role switcher, exactly as before.
+There is no demo mode. If Supabase isn't configured yet, or the env vars
+are missing, clicking **Login** shows a plain "this portal isn't
+connected yet" message instead of a sign-in form or a fake dashboard —
+that's the signal to finish steps 2 and 4 above.
 
 ## 6. Bootstrap the First Manager
 

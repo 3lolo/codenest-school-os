@@ -17,10 +17,11 @@ Commands run:
 - `node --check api/_lib/password.js`
 - `node --check build.mjs`
 - Headless-browser smoke test (Playwright) of: the marketing homepage
-  rendering with no JS errors; clicking **Login** entering demo mode;
-  switching the demo role switcher to Instructor and confirming
-  **Accounts & Logins** (relabeled "Student Logins" for that role) appears
-  and shows the scoped view; and submitting the Contact us form.
+  rendering with no JS errors; clicking **Login** without Supabase
+  configured showing the "not connected yet" screen (confirming there is
+  no demo dashboard, no fake sample data, and no role switcher anywhere in
+  the app); "Back to homepage" returning to the marketing page; and
+  submitting the Contact us form.
 
 ## What Was Tested
 
@@ -60,8 +61,11 @@ Frontend:
 - Student lists are filtered through `canViewStudent`.
 - Search results are filtered before display.
 - The marketing homepage is the first thing every visitor sees; **Login**
-  moves to the real sign-in screen when Supabase is configured, or into
-  the demo/preview role switcher when it isn't.
+  moves to the real sign-in screen when Supabase is configured, or to a
+  plain "not connected yet" screen when it isn't. There is no demo mode
+  and no built-in sample data anywhere in the shipped app — every list
+  (students, classes, assignments, etc.) starts empty until Supabase
+  provides real rows.
 - An Instructor's Accounts & Logins view is filtered to their own students
   via `filterStudentsForViewer` — the same helper used everywhere else in
   the app to scope an instructor's view.

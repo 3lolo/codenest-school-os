@@ -86,19 +86,22 @@ configuration is needed for account creation to work once deployed.
 
 ## Logging In
 
-- Visiting the site shows the marketing homepage first; click **Login** to
-  reach the sign-in screen (or, without Supabase configured, straight into
-  the demo/preview dashboard).
-- Once Supabase Auth is wired up (migrations 0002-0004), the app shows a
-  real sign-in screen instead of the demo role switcher.
+There is no demo mode. Visiting the site always shows the marketing
+homepage first; clicking **Login**:
+
+- Goes to a real Supabase sign-in screen once `SUPABASE_URL` /
+  `SUPABASE_ANON_KEY` are set in Vercel and migrations 0002-0004 have run.
+- Otherwise shows a plain "this portal isn't connected yet" message — never
+  a fake dashboard or sample data.
+
+Once connected:
+
 - A Manager issues an Instructor's or Student's first username and
   password from **Accounts & Logins**. An Instructor can do the same, but
   only for Students in their own classes. The temporary password is shown
   once — share it with that person right away.
 - Everyone is required to set their own password the first time they sign
   in with a temporary one.
-- Without Supabase configured, the app runs in demo/preview mode with the
-  original role switcher, unchanged.
 
 ## Security
 

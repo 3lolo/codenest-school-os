@@ -29,8 +29,8 @@ Authorization must be enforced server-side on every sensitive request.
 The product exposes exactly three account *types* that get issued from
 Accounts & Logins — **Manager**, **Instructor**, **Student** — displayed
 that way in the UI (`roleLabel()` in `src/security.js`). Underneath, the
-role column still stores the original five-tier values so RLS and the
-demo role switcher keep their existing granularity:
+role column still stores the original five-tier values so RLS keeps its
+existing granularity:
 
 - Super Admin / School Admin (both shown as **Manager**): full school
   operations. Only Super Admin can reach platform Settings and Audit Logs.
@@ -88,8 +88,12 @@ the very first thing a visitor sees, before any login. It covers:
   `public.is_admin()`.
 
 Clicking **Login** moves to the real Supabase sign-in screen when
-Supabase is configured, or straight into the demo/preview dashboard when
-it isn't.
+Supabase is configured. There is no demo/preview mode — until Supabase is
+connected, **Login** shows a plain "not connected yet" screen instead of a
+dashboard, and every list in the app (students, classes, assignments,
+etc.) starts empty rather than shipping with fabricated sample rows. The
+only sample content left is the two clearly-labeled sections on the
+marketing homepage itself (`sampleReviews`, `compareRows`).
 
 ## Notification Architecture
 
