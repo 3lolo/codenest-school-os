@@ -76,11 +76,21 @@ username (email) and password instead of a shared/preview identity:
 ## Marketing Homepage
 
 `src/app.js` renders a public marketing screen (`marketingScreen()`) as
-the very first thing a visitor sees, before any login. It covers:
+the very first thing a visitor sees, before any login. It is pitched at
+parents and prospective students — Hero Tech Academy is a real coding
+academy for kids, not a platform sold to other schools; the Manager /
+Instructor / Student roles described elsewhere in this doc are the
+internal operations side, not the homepage's sales pitch. It covers:
 
-- Hero + a breakdown of the three account types.
-- A sample "how it compares" section (`compareRows`) — clearly labeled as
-  sample content to replace.
+- Hero copy aimed at parents ("Where Kids Learn to Code, Create, and
+  Build Real Projects"), a `trustStats` strip (60+ students trained so
+  far, ages served, live instructor-led format), and an "Our Coding
+  Programs" section (`programTracks`) broken out by age band — clearly
+  labeled as sample content to replace with the real curriculum.
+- A sample "how it compares" section (`compareRows`) — against generic
+  alternatives (pre-recorded video courses, one-off workshops) from a
+  parent's buying perspective — clearly labeled as sample content to
+  replace.
 - A reviews section that renders `[...state.publicReviews, ...sampleReviews]`
   — real, Manager-approved reviews first, then the clearly-tagged sample
   reviews (three English, two Arabic) as filler until real ones exist.
@@ -107,8 +117,10 @@ Supabase is configured. There is no demo/preview mode — until Supabase is
 connected, **Login** shows a plain "not connected yet" screen instead of a
 dashboard, and every list in the app (students, classes, assignments,
 etc.) starts empty rather than shipping with fabricated sample rows. The
-only sample content left is the two clearly-labeled sections on the
-marketing homepage itself (`sampleReviews`, `compareRows`).
+only sample content left is the clearly-labeled sections on the marketing
+homepage itself (`programTracks`, `sampleReviews`, `compareRows`), plus
+the `trustStats` numbers, which should be updated as real enrollment
+grows past the current 60+ students trained.
 
 ## Notification Architecture
 

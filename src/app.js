@@ -844,38 +844,62 @@ function forcePasswordScreen() {
 
 const sampleReviews = [
   {
-    quote: "We went from three spreadsheets and a shared inbox to one place where every instructor knows exactly which students are theirs.",
-    name: "Director, mid-size coding bootcamp",
+    quote: "My son couldn't stop talking about the game he built in class — he's already asking when the next module starts!",
+    name: "Parent of a Junior Coders student",
     tag: "Sample review",
   },
   {
-    quote: "Being able to hand an instructor the ability to set up their own students' logins — without giving them access to billing or settings — was the feature that sold us.",
-    name: "Operations lead, after-school coding program",
+    quote: "I built my own website in the Code Builders track and showed it to my whole class. Best decision my parents made for me this year.",
+    name: "Code Builders student, age 12",
     tag: "Sample review",
   },
   {
-    quote: "انتقلنا من الفوضى بين جداول البيانات والبريد الإلكتروني إلى مكان واحد يعرف فيه كل مدرّب طلابه بدقة.",
-    name: "مدير أكاديمية برمجة",
+    quote: "ابني بقى يتحمس يروح الحصة كل أسبوع، وعمل أول لعبة له بنفسه — فخورين جدًا فيه.",
+    name: "والد طالب في مسار Junior Coders",
     tag: "مراجعة تجريبية",
   },
   {
-    quote: "الأهالي لم يعودوا يراسلوننا لطلب كلمة مرور أبنائهم — عملية إعادة التعيين تعمل من تلقاء نفسها.",
-    name: "إدارة أكاديمية برمجة لعطلة نهاية الأسبوع",
+    quote: "تعلمت البرمجة من الصفر وعملت أول موقع إلكتروني ليا في خلال شهرين بس.",
+    name: "طالبة في مسار Code Builders",
     tag: "مراجعة تجريبية",
   },
   {
-    quote: "Parents stopped emailing us asking for their kid's password. The reset flow just works.",
-    name: "School admin, weekend coding academy",
+    quote: "The instructors are patient and really get how kids learn. My daughter went from \"I don't get coding\" to teaching her little brother in a few weeks.",
+    name: "Parent of a Young Developers student",
     tag: "Sample review",
   },
 ];
 
+const trustStats = [
+  { value: "60+", label: "Students trained so far" },
+  { value: "Ages 6–16", label: "Programs for every age" },
+  { value: "Live", label: "Instructor-led, not pre-recorded" },
+];
+
+const programTracks = [
+  {
+    name: "Junior Coders",
+    age: "Ages 6–9",
+    desc: "Block-based coding with Scratch — kids build their first animations and games while learning logic and sequencing.",
+  },
+  {
+    name: "Code Builders",
+    age: "Ages 10–13",
+    desc: "Python fundamentals and web basics — real projects kids can show off, from simple apps to their first website.",
+  },
+  {
+    name: "Young Developers",
+    age: "Ages 14–17",
+    desc: "Web and app development, plus game-dev fundamentals — building a portfolio ready for the next step.",
+  },
+];
+
 const compareRows = [
-  ["Every person signs in with their own username & password", "check", "cross", "partial"],
-  ["Row-level security enforced in the database, not just the UI", "check", "cross", "cross"],
-  ["Instructors can create student logins for their own classes only", "check", "cross", "cross"],
-  ["Attendance, grading, and messaging in one place", "check", "partial", "check"],
-  ["Deploys to your own Vercel + Supabase project (you own the data)", "check", "cross", "cross"],
+  ["Live, instructor-led classes with real-time feedback", "check", "cross", "partial"],
+  ["Small class sizes with personal attention", "check", "cross", "partial"],
+  ["Structured curriculum that builds skills over time", "check", "partial", "cross"],
+  ["Real projects your child can show off and be proud of", "check", "partial", "partial"],
+  ["Parents can track attendance & progress online", "check", "cross", "cross"],
 ];
 
 function compareIcon(kind) {
@@ -909,7 +933,7 @@ function marketingScreen() {
           <strong>${school.name}</strong>
         </div>
         <nav class="m-nav-links" aria-label="Marketing navigation">
-          <a href="#features">Features</a>
+          <a href="#features">Programs</a>
           <a href="#compare">Compare</a>
           <a href="#reviews">Reviews</a>
           <a href="#contact">Contact</a>
@@ -919,40 +943,38 @@ function marketingScreen() {
       </header>
 
       <section class="m-hero">
-        <p class="eyebrow">Coding school management platform</p>
-        <h1>Run your coding school without the spreadsheet chaos</h1>
-        <p class="m-sub">Manager, Instructor, and Student accounts with real per-person logins, role-based access, attendance, assignments, and reporting — deployable on your own Vercel + Supabase project.</p>
+        <p class="eyebrow">Coding courses for kids</p>
+        <h1>Where Kids Learn to Code, Create, and Build Real Projects</h1>
+        <p class="m-sub">Live, instructor-led coding classes for kids — small groups, real projects, and a secure portal so parents can follow every step of their child's progress.</p>
         <div class="m-hero-actions">
-          <button class="m-cta-primary" onclick="beginLogin()">Login to your portal</button>
-          <a class="m-cta-secondary" href="#contact">Request a call</a>
+          <a class="m-cta-primary" href="#contact">Book a free trial class</a>
+          <a class="m-cta-secondary" href="#features">View our programs</a>
+        </div>
+        <div class="m-stats">
+          ${trustStats.map((stat) => `<div class="m-stat"><strong>${stat.value}</strong><span>${stat.label}</span></div>`).join("")}
         </div>
       </section>
 
       <section id="features" class="m-section">
-        <h2>Built around three account types</h2>
-        <p class="m-sub">Every account is scoped to exactly what that person should see and do.</p>
+        <h2>Our Coding Programs</h2>
+        <p class="m-sub"><span class="sample-tag">Sample programs</span> — replace with your real course tracks, ages, and outcomes.</p>
         <div class="m-cards">
-          <article class="m-card">
-            <h3>Manager</h3>
-            <p>Full school operations: creates Instructor and Student accounts, manages classes, reports, settings, and contact requests.</p>
-          </article>
-          <article class="m-card">
-            <h3>Instructor</h3>
-            <p>Manages assigned classes and can create Student accounts for their own students — nothing outside their scope.</p>
-          </article>
-          <article class="m-card">
-            <h3>Student</h3>
-            <p>Signs in with their own username and password to see assignments, attendance, and grades.</p>
-          </article>
+          ${programTracks.map((track) => `
+            <article class="m-card">
+              <h3>${track.name} <span class="m-age">${track.age}</span></h3>
+              <p>${track.desc}</p>
+            </article>
+          `).join("")}
         </div>
+        <p class="m-sub">Every student gets a secure login to track their own attendance, assignments, and progress — and parents can follow along too.</p>
       </section>
 
       <section id="compare" class="m-section">
-        <h2>How it compares</h2>
-        <p class="m-sub"><span class="sample-tag">Sample comparison</span> — a general picture of how a dedicated platform like this stacks up against common alternatives. Edit freely once you know your real competitors.</p>
+        <h2>How We Compare</h2>
+        <p class="m-sub"><span class="sample-tag">Sample comparison</span> — a general picture of how a program like ours stacks up against common alternatives for kids' coding education. Edit freely once you know your real competitors.</p>
         <div class="table-panel">
           <table class="m-compare">
-            <thead><tr><th></th><th>${school.name}</th><th>Spreadsheets &amp; email</th><th>Generic LMS</th></tr></thead>
+            <thead><tr><th></th><th>${school.name}</th><th>Pre-recorded video courses</th><th>One-off workshops</th></tr></thead>
             <tbody>
               ${compareRows.map(([label, a, b, c]) => `<tr><td>${label}</td><td>${compareIcon(a)}</td><td>${compareIcon(b)}</td><td>${compareIcon(c)}</td></tr>`).join("")}
             </tbody>
@@ -961,8 +983,8 @@ function marketingScreen() {
       </section>
 
       <section id="reviews" class="m-section">
-        <h2>What schools say</h2>
-        <p class="m-sub">${state.publicReviews.length ? "" : `<span class="sample-tag">Sample reviews</span> — `}real reviews approved by a Manager appear here alongside these starter examples.</p>
+        <h2>What Parents &amp; Students Say</h2>
+        <p class="m-sub">We've trained <strong>60+ students</strong> so far. ${state.publicReviews.length ? "" : `<span class="sample-tag">Sample reviews</span> — `}real reviews approved by a Manager appear here alongside these starter examples.</p>
         <div class="m-cards">
           ${allReviews.map((review) => `
             <article class="m-card m-review">
@@ -980,7 +1002,7 @@ function marketingScreen() {
           ${reviewNotice ? `<p class="${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}</p>` : ""}
           <div class="m-review-form-grid">
             <label>Your name<input type="text" name="name" required /></label>
-            <label>Role / school (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent at Hero Tech Academy" /></label>
+            <label>You are a... (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent of a Code Builders student" /></label>
           </div>
           <label>Rating
             <select name="rating">
@@ -1001,7 +1023,7 @@ function marketingScreen() {
         <div class="m-contact-grid">
           <div>
             <h2>Contact us</h2>
-            <p class="m-sub">Questions about setting up your school, or want a walkthrough before you commit? Send a message, request a call back, or reach us directly.</p>
+            <p class="m-sub">Want to book a free trial class, ask about pricing, or find the right program for your child? Send a message, request a call back, or reach us directly.</p>
             <div class="m-contact-social">${socialLinksHtml()}</div>
           </div>
           <form class="m-contact-form" onsubmit="handleContactSubmit(event)">

@@ -1,34 +1,48 @@
 # Hero Tech Academy
 
-Coding school management platform for Vercel and Supabase, with a public
-marketing homepage and real per-person login: every Manager, Instructor,
-and Student signs in with their own username (email) and password.
+A real coding academy for kids — Hero Tech Academy runs live,
+instructor-led coding courses for kids (ages 6–16). This project is both
+the public marketing site parents see and the internal school-operations
+platform staff use to run it, deployed on Vercel and Supabase with real
+per-person logins: every Manager, Instructor, and Student signs in with
+their own username (email) and password.
 
-## Account Types
+## Account Types (Internal — the School's Operations Side)
+
+These are the logins staff and students use once they're enrolled — not
+something sold to other schools:
 
 - **Manager** (Super Admin / School Admin under the hood) — full school
   operations. Creates both Instructor and Student accounts, manages
-  classes, reports, settings, and incoming Contact Requests.
+  classes, reports, settings, incoming Contact Requests, and Reviews.
 - **Instructor** — manages their assigned classes and can create/reset
   **Student** accounts, but only for students in their own classes.
 - **Student** — signs in to see their own assignments, attendance, and
   grades.
 
 (There is also an optional Parent/Guardian role inherited from the
-original build, kept for schools that want it — it isn't one of the three
-account types issued from Accounts & Logins.)
+original build, kept in case it's useful later — it isn't one of the
+three account types issued from Accounts & Logins.)
 
 ## Marketing Homepage
 
-Opening the site now shows a public homepage first — hero, a "who it's
-for" breakdown of the three account types, a sample comparison section, a
-reviews section, a **Contact us / Request a call** form, and links to the
+Opening the site shows the public homepage first — a hero pitched at
+parents ("Where Kids Learn to Code, Create, and Build Real Projects"), a
+trust stats strip (**60+ students trained so far**, ages served, live
+instructor-led format), an **Our Coding Programs** section broken out by
+age band, a comparison section against generic alternatives (pre-recorded
+video courses, one-off workshops), a reviews section from parents and
+students, a **Contact us / Request a call** form, and links to the
 school's Facebook page and WhatsApp — with a **Login** button in the
-header that takes visitors to the real sign-in screen.
+header for staff/students/parents who already have portal accounts.
 
-- `sampleReviews` and `compareRows` in `src/app.js` hold clearly-labeled
-  starter content ("Sample review" tag, marked as such) — replace with
-  your own competitive comparison whenever you have one.
+- `programTracks`, `sampleReviews`, and `compareRows` in `src/app.js` hold
+  clearly-labeled starter content ("Sample programs" / "Sample review" /
+  "Sample comparison" tags) — replace with your real course tracks,
+  competitors, and (as real reviews come in) let the sample reviews fall
+  away naturally.
+- `trustStats` in `src/app.js` holds the "60+ students trained" stat strip
+  — update the numbers there as your real enrollment grows.
 - Real reviews: any visitor can submit a review from the **Leave a
   review** form on the homepage. Submissions land as `pending` in a
   Supabase table (`reviews`, see migration `0005`) and are invisible to
