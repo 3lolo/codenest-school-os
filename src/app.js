@@ -772,6 +772,31 @@ function renderContentOnly() {
 
 function render() {
   document.querySelector("#app").innerHTML = appShell();
+  if (state.authMode === "marketing") setupScrollReveal();
+}
+
+// Fades/slides each marketing-page section, card, and stat into place the
+// first time it scrolls into view. Falls back to showing everything
+// immediately if IntersectionObserver isn't available; CSS also disables
+// all of this under prefers-reduced-motion.
+function setupScrollReveal() {
+  const targets = document.querySelectorAll(".reveal");
+  if (!("IntersectionObserver" in window)) {
+    targets.forEach((el) => el.classList.add("in-view"));
+    return;
+  }
+  const observer = new IntersectionObserver(
+    (entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("in-view");
+          observer.unobserve(entry.target);
+        }
+      });
+    },
+    { threshold: 0.15 },
+  );
+  targets.forEach((el) => observer.observe(el));
 }
 
 function appShell() {
@@ -964,16 +989,16 @@ function marketingScreen() {
           <a class="m-cta-secondary" href="#features">View our programs</a>
         </div>
         <div class="m-stats">
-          ${trustStats.map((stat) => `<div class="m-stat"><strong>${stat.value}</strong><span>${stat.label}</span></div>`).join("")}
+          ${trustStats.map((stat) => `<div class="m-stat reveal"><strong>${stat.value}</strong><span>${stat.label}</span></div>`).join("")}
         </div>
       </section>
 
-      <section id="features" class="m-section">
+      <section id="features" class="m-section reveal">
         <h2>Our Coding Programs</h2>
         <p class="m-sub">Structured tracks by age, so every child starts at the right level.</p>
         <div class="m-cards">
           ${programTracks.map((track) => `
-            <article class="m-card">
+            <article class="m-card reveal">
               <h3>${track.name} <span class="m-age">${track.age}</span></h3>
               <p>${track.desc}</p>
             </article>
@@ -982,7 +1007,7 @@ function marketingScreen() {
         <p class="m-sub">Every student gets a secure login to track their own attendance, assignments, and progress — and parents can follow along too.</p>
       </section>
 
-      <section id="compare" class="m-section">
+      <section id="compare" class="m-section reveal">
         <h2>How We Compare</h2>
         <p class="m-sub">How Hero Tech Academy stacks up against common alternatives for kids' coding education.</p>
         <div class="table-panel">
@@ -995,12 +1020,12 @@ function marketingScreen() {
         </div>
       </section>
 
-      <section id="reviews" class="m-section">
+      <section id="reviews" class="m-section reveal">
         <h2>What Parents &amp; Students Say</h2>
         <p class="m-sub">We've trained <strong>60+ students</strong> so far — here's what a few of them have to say.</p>
         <div class="m-cards">
           ${allReviews.map((review) => `
-            <article class="m-card m-review">
+            <article class="m-card m-review reveal">
               <p dir="auto">&ldquo;${review.quote}&rdquo;</p>
               <strong>${review.name}</strong>
               ${review.role_or_school ? `<span class="m-review-role">${review.role_or_school}</span>` : ""}
@@ -1031,7 +1056,7 @@ function marketingScreen() {
         </form>
       </section>
 
-      <section id="contact" class="m-section m-contact">
+      <section id="contact" class="m-section m-contact reveal">
         <div class="m-contact-grid">
           <div>
             <h2>Contact us</h2>
@@ -1713,6 +1738,18 @@ document.addEventListener("keydown", (event) => {
     dismissPromoModal();
   }
 });
+
+// Registered once, not per-render: re-queries the nav each scroll instead
+// of capturing a reference, so it keeps working across full re-renders of
+// #app without leaking a new listener every time.
+window.addEventListener(
+  "scroll",
+  () => {
+    const nav = document.querySelector(".m-nav");
+    if (nav) nav.classList.toggle("scrolled", window.scrollY > 8);
+  },
+  { passive: true },
+);
 
 async function initApp() {
   render();
