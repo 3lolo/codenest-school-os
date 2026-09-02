@@ -1,5 +1,8 @@
 import {
   canAccessModule,
+  canCreateClasses,
+  canCreateInstructorProfiles,
+  canCreateStudentProfiles,
   filterStudentsForViewer,
   roleLabel,
   safeSearchRowsForViewer,
@@ -37,6 +40,10 @@ const state = {
   reviewsDirectory: null,
   reviewsBusy: null,
   promoModalDismissed: false,
+  modal: null,
+  modalBusy: false,
+  modalError: "",
+  modalNotice: "",
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -56,6 +63,7 @@ const navItems = [
   ["communications", "Messages", "message"],
   ["reports", "Reports", "chart"],
   ["notifications", "Notifications", "bell"],
+  ["materials", "Materials", "folder"],
   ["accounts", "Accounts & Logins", "key"],
   ["leads", "Contact Requests", "message"],
   ["reviews", "Reviews", "chart"],
@@ -93,6 +101,9 @@ let assignments = [];
 let communications = [];
 let auditLogs = [];
 let notifications = [];
+let groups = [];
+let groupMembers = [];
+let materials = [];
 
 const icons = {
   grid: "▦",
@@ -107,6 +118,7 @@ const icons = {
   gear: "⚙",
   shield: "◇",
   key: "⚷",
+  folder: "▧",
 };
 
 function can(view) {
@@ -208,6 +220,7 @@ function shell() {
       </header>
       <section id="content" class="content">${content()}</section>
     </main>
+    ${modalHost()}
   `;
 }
 
@@ -218,6 +231,7 @@ function titleForView() {
     families: "Family Management",
     classes: "Courses and Classes",
     assignments: "Assignment Center",
+    materials: "Class Materials",
     attendance: "Attendance",
     communications: "Communication Center",
     reports: "Reports",
@@ -238,6 +252,7 @@ function content() {
     families: families(),
     classes: classesView(),
     assignments: assignmentsView(),
+    materials: materialsView(),
     attendance: attendanceView(),
     communications: communicationsView(),
     reports: reportsView(),
@@ -482,8 +497,14 @@ function families() {
 }
 
 function classesView() {
+  const canAddClass = canCreateClasses(state.role);
+  const canAddStudent = canCreateStudentProfiles(state.role);
+  const viewerClasses = classesForViewer();
   return `
-    <div class="toolbar"><button>New course</button><button>New class</button><button>Schedule event</button></div>
+    <div class="toolbar">
+      ${canAddClass ? `<button onclick="openModal('addClass')">New class</button>` : ""}
+      ${canAddStudent ? `<button onclick="openModal('addStudent')">Add student</button>` : ""}
+    </div>
     <div class="class-grid">
       ${classes.map((item) => `
         <article class="panel class-tile">
@@ -496,15 +517,17 @@ function classesView() {
             <div><dt>Room</dt><dd>${item.room}</dd></div>
           </dl>
           ${chartRow("Curriculum completion", item.completion)}
+          ${viewerClasses.some((c) => c.id === item.id) ? `<button onclick="openModal('addGroup', { classId: '${escapeJs(item.id)}' })">Manage groups</button>` : ""}
         </article>
-      `).join("")}
+      `).join("") || `<p class="empty">No classes yet.</p>`}
     </div>
   `;
 }
 
 function assignmentsView() {
+  const canAdd = classesForViewer().length > 0;
   return `
-    <div class="toolbar"><button>New assignment</button><button>Publish draft</button><button>Grade queue</button></div>
+    <div class="toolbar">${canAdd ? `<button onclick="openModal('addAssignment')">New assignment</button>` : ""}</div>
     ${assignmentPanel()}
   `;
 }
@@ -650,11 +673,93 @@ async function supabaseSelect(table, select = "*", token) {
   return response.json();
 }
 
+// Generic authenticated write helpers used by every "Add ..." form below.
+// These insert/update directly against PostgREST with the signed-in
+// user's own access token, relying entirely on the RLS policies in the
+// Supabase migrations (0002-0006) to decide who is actually allowed to do
+// what — the same policies that already govern reads.
+async function supabaseInsert(table, rows) {
+  if (!state.session) throw new Error("Sign in and try again.");
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/rest/v1/${table}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(rows),
+  });
+  const body = await response.json().catch(() => []);
+  if (!response.ok) {
+    throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
+  }
+  return body;
+}
+
+async function supabaseUploadFile(path, file) {
+  if (!state.session) throw new Error("Sign in and try again.");
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/storage/v1/object/materials/${path}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+      "Content-Type": file.type || "application/octet-stream",
+    },
+    body: file,
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || "Could not upload the file.");
+  }
+}
+
+async function supabaseDownloadFile(path, fileName) {
+  if (!state.session) return;
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/storage/v1/object/materials/${path}`, {
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+  });
+  if (!response.ok) return;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName || "material";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+function nextRefId(prefix, existingIds) {
+  const used = new Set(existingIds);
+  let n = 1;
+  while (used.has(`${prefix}-${String(n).padStart(3, "0")}`)) n += 1;
+  return `${prefix}-${String(n).padStart(3, "0")}`;
+}
+
 async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   try {
-    const [settingsRows, studentRows, parentRows, instructorRows, classRows, assignmentRows, communicationRows, auditRows, notificationRows] = await Promise.all([
+    const [
+      settingsRows,
+      studentRows,
+      parentRows,
+      instructorRows,
+      classRows,
+      assignmentRows,
+      communicationRows,
+      auditRows,
+      notificationRows,
+      groupRows,
+      groupMemberRows,
+      materialRows,
+    ] = await Promise.all([
       supabaseSelect("school_settings", "*", token),
       supabaseSelect("students", "*", token),
       supabaseSelect("parents", "*", token),
@@ -664,6 +769,9 @@ async function loadFromSupabase(token) {
       supabaseSelect("communications", "*", token),
       supabaseSelect("audit_logs", "*", token),
       supabaseSelect("notifications", "*", token),
+      supabaseSelect("groups", "*", token).catch(() => []),
+      supabaseSelect("group_members", "*", token).catch(() => []),
+      supabaseSelect("materials", "*", token).catch(() => []),
     ]);
 
     const settings = settingsRows[0];
@@ -726,6 +834,7 @@ async function loadFromSupabase(token) {
       title: assignment.title,
       course: assignment.course,
       className: assignment.class_name,
+      groupId: assignment.group_id || null,
       due: assignment.due_date,
       status: assignment.status,
       submissions: assignment.submissions,
@@ -755,6 +864,27 @@ async function loadFromSupabase(token) {
       title: notification.title,
       time: notification.display_time,
       unread: notification.unread,
+    }));
+
+    groups = groupRows.map((group) => ({
+      id: group.group_id,
+      name: group.name,
+      classId: group.class_id,
+    }));
+
+    groupMembers = groupMemberRows.map((member) => ({
+      groupId: member.group_id,
+      studentId: member.student_id,
+    }));
+
+    materials = materialRows.map((material) => ({
+      id: material.id,
+      title: material.title,
+      classId: material.class_id,
+      groupId: material.group_id,
+      filePath: material.file_path,
+      fileName: material.file_name,
+      createdAt: material.created_at,
     }));
 
     dataSource.label = "Supabase connected";
@@ -797,6 +927,574 @@ function setupScrollReveal() {
     { threshold: 0.15 },
   );
   targets.forEach((el) => observer.observe(el));
+}
+
+// ---------------------------------------------------------------------
+// Dashboard modals: Add Class, Add Instructor, Add Student, Add Manager,
+// Add Group, Add Material, Add Assignment. One small overlay system reused
+// by all of them instead of a separate dialog implementation each.
+// ---------------------------------------------------------------------
+
+function openModal(type, extra = {}) {
+  state.modal = { type, ...extra };
+  state.modalBusy = false;
+  state.modalError = "";
+  state.modalNotice = "";
+  render();
+}
+
+function closeModal() {
+  state.modal = null;
+  state.modalBusy = false;
+  state.modalError = "";
+  state.modalNotice = "";
+  render();
+}
+
+function classesForViewer() {
+  if (state.role === "Instructor") {
+    return classes.filter((item) => item.instructor === state.viewerContext?.instructorName);
+  }
+  return classes;
+}
+
+function studentsInClass(classId) {
+  return people.students.filter((student) => student.classId === classId);
+}
+
+function groupsInClass(classId) {
+  return groups.filter((group) => group.classId === classId);
+}
+
+async function refreshAfterWrite() {
+  await loadFromSupabase(state.session?.access_token);
+  recomputeInstructorClassIds();
+  if (state.accountsDirectory) await loadAccountsDirectory();
+}
+
+function modalHost() {
+  if (!state.modal) return "";
+  return `
+    <div class="modal-overlay" onclick="if (event.target === this) closeModal()">
+      <div class="modal-box" role="dialog" aria-modal="true">
+        <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
+        ${modalBody(state.modal)}
+      </div>
+    </div>
+  `;
+}
+
+function modalMessages() {
+  return `
+    ${state.modalError ? `<p class="notice-row auth-error">${state.modalError}</p>` : ""}
+    ${state.modalNotice ? `<p class="notice-row m-success">${state.modalNotice}</p>` : ""}
+  `;
+}
+
+function modalBody(modal) {
+  switch (modal.type) {
+    case "addClass":
+      return addClassModal();
+    case "addInstructor":
+      return addInstructorModal();
+    case "addStudent":
+      return addStudentModal(modal);
+    case "addManager":
+      return addManagerModal();
+    case "addGroup":
+      return addGroupModal(modal);
+    case "addMaterial":
+      return addMaterialModal();
+    case "addAssignment":
+      return addAssignmentModal();
+    default:
+      return "";
+  }
+}
+
+function addClassModal() {
+  const isInstructor = state.role === "Instructor";
+  const instructorOptions = people.instructors
+    .map((instructor) => `<option value="${instructor.name}">${instructor.name}</option>`)
+    .join("");
+  return `
+    <h2>Add a class</h2>
+    ${modalMessages()}
+    <form onsubmit="handleAddClass(event)">
+      <label>Class name<input type="text" name="name" required /></label>
+      <label>Course / subject<input type="text" name="course" required /></label>
+      ${
+        isInstructor
+          ? `<input type="hidden" name="instructor" value="${escapeHtml(state.viewerContext?.instructorName || "")}" /><p class="hint">Instructor: ${state.viewerContext?.instructorName || "—"}</p>`
+          : `<label>Instructor<select name="instructor" required><option value="">Choose...</option>${instructorOptions}</select></label>`
+      }
+      <label>Schedule<input type="text" name="schedule" placeholder="e.g. Tue &amp; Thu 5-6pm" /></label>
+      <label>Room<input type="text" name="room" placeholder="e.g. Room A / Online" /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create class"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function addInstructorModal() {
+  return `
+    <h2>Add an instructor</h2>
+    <p class="hint">Creates a real instructor record. Leave "issue a login now" checked to also give them a username and password right away.</p>
+    ${modalMessages()}
+    <form onsubmit="handleAddInstructor(event)">
+      <label>Full name<input type="text" name="name" required /></label>
+      <label>Email<input type="email" name="email" required /></label>
+      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> Issue a login now</label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add instructor"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function addStudentModal() {
+  const isInstructor = state.role === "Instructor";
+  const classOptions = classesForViewer()
+    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+    .join("");
+  return `
+    <h2>Add a student</h2>
+    ${isInstructor ? `<p class="hint">You can only add students to your own classes.</p>` : ""}
+    ${modalMessages()}
+    <form onsubmit="handleAddStudent(event)">
+      <label>First name<input type="text" name="firstName" required /></label>
+      <label>Last name<input type="text" name="lastName" required /></label>
+      <label>Email<input type="email" name="email" required /></label>
+      <label>Class<select name="classId" required><option value="">Choose...</option>${classOptions}</select></label>
+      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> Issue a login now</label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add student"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function addManagerModal() {
+  return `
+    <h2>Add a manager</h2>
+    <p class="hint">Gives someone full school-operations access, the same as your own account.</p>
+    ${modalMessages()}
+    <form onsubmit="handleAddManager(event)">
+      <label>Full name<input type="text" name="name" required /></label>
+      <label>Email<input type="email" name="email" required /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add manager"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function addGroupModal(modal) {
+  const classId = modal.classId;
+  const cls = classes.find((item) => item.id === classId);
+  const roster = studentsInClass(classId);
+  const existing = groupsInClass(classId);
+  return `
+    <h2>Groups — ${cls ? cls.name : ""}</h2>
+    ${modalMessages()}
+    <div class="modal-existing-list">
+      ${
+        existing.length
+          ? existing
+              .map((group) => {
+                const members = groupMembers.filter((m) => m.groupId === group.id).map((m) => m.studentId);
+                const names = people.students.filter((s) => members.includes(s.id)).map(fullName);
+                return `<article class="modal-existing-row"><strong>${group.name}</strong><span>${names.join(", ") || "No students yet"}</span></article>`;
+              })
+              .join("")
+          : `<p class="hint">No groups yet for this class.</p>`
+      }
+    </div>
+    <form onsubmit="handleAddGroup(event, '${escapeJs(classId)}')">
+      <label>New group name<input type="text" name="name" required /></label>
+      <fieldset class="modal-checklist">
+        <legend>Students in this class</legend>
+        ${
+          roster
+            .map((student) => `<label class="checkline"><input type="checkbox" name="members" value="${student.id}" /> ${fullName(student)}</label>`)
+            .join("") || `<p class="hint">No students in this class yet.</p>`
+        }
+      </fieldset>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create group"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function addMaterialModal() {
+  const classOptions = classesForViewer()
+    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+    .join("");
+  return `
+    <h2>Upload material</h2>
+    ${modalMessages()}
+    <form onsubmit="handleAddMaterial(event)">
+      <label>Title<input type="text" name="title" required /></label>
+      <label>Class<select name="classId" required onchange="renderModalGroupOptions(this.value)"><option value="">Choose...</option>${classOptions}</select></label>
+      <label>Share with (optional)<select name="groupId" id="material-group-select"><option value="">Whole class</option></select></label>
+      <label>File<input type="file" name="file" required /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Uploading…" : "Upload"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderModalGroupOptions(classId) {
+  const select = document.getElementById("material-group-select");
+  if (!select) return;
+  const options = groupsInClass(classId)
+    .map((group) => `<option value="${group.id}">${group.name}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">Whole class</option>${options}`;
+}
+
+function addAssignmentModal() {
+  const classOptions = classesForViewer()
+    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+    .join("");
+  return `
+    <h2>New assignment</h2>
+    ${modalMessages()}
+    <form onsubmit="handleAddAssignment(event)">
+      <label>Title<input type="text" name="title" required /></label>
+      <label>Course / topic<input type="text" name="course" required /></label>
+      <label>Class<select name="classId" required onchange="renderAssignmentGroupOptions(this.value)"><option value="">Choose...</option>${classOptions}</select></label>
+      <label>Share with (optional)<select name="groupId" id="assignment-group-select"><option value="">Whole class</option></select></label>
+      <label>Due date<input type="date" name="dueDate" /></label>
+      <label>Max grade<input type="number" name="maxGrade" value="100" min="1" /></label>
+      <label>Difficulty
+        <select name="difficulty">
+          <option value="Beginner">Beginner</option>
+          <option value="Intermediate">Intermediate</option>
+          <option value="Advanced">Advanced</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create assignment"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function renderAssignmentGroupOptions(classId) {
+  const select = document.getElementById("assignment-group-select");
+  if (!select) return;
+  const options = groupsInClass(classId)
+    .map((group) => `<option value="${group.id}">${group.name}</option>`)
+    .join("");
+  select.innerHTML = `<option value="">Whole class</option>${options}`;
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function handleAddClass(event) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const course = form.course.value.trim();
+  const instructor = form.instructor.value.trim();
+  const schedule = form.schedule.value.trim();
+  const room = form.room.value.trim();
+  if (!name || !course || !instructor) {
+    state.modalError = "Please fill in the class name, course, and instructor.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const classId = nextRefId("CLS", classes.map((item) => item.id));
+    await supabaseInsert("classes", [
+      {
+        class_id: classId,
+        name,
+        course,
+        instructor,
+        student_count: 0,
+        schedule: schedule || null,
+        room: room || null,
+        status: "Active",
+        completion: 0,
+      },
+    ]);
+    await refreshAfterWrite();
+    closeModal();
+    navigate("classes");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not create the class.";
+    render();
+  }
+}
+
+async function handleAddInstructor(event) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const email = form.email.value.trim().toLowerCase();
+  const issueLogin = form.issueLogin.checked;
+  if (!name || !email) {
+    state.modalError = "Please add a name and email.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseInsert("instructors", [{ name, email, classes: [], status: "Active" }]);
+    let notice = `${name} was added as an instructor.`;
+    if (issueLogin) {
+      const result = await callAccountApi({ role: "Instructor", email, fullName: name, instructorRef: name });
+      notice += ` Username: ${result.email} · Temporary password: ${result.password}`;
+    }
+    await refreshAfterWrite();
+    state.modalBusy = false;
+    state.modalError = "";
+    state.modalNotice = notice;
+    render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not add the instructor.";
+    render();
+  }
+}
+
+async function handleAddStudent(event) {
+  event.preventDefault();
+  const form = event.target;
+  const firstName = form.firstName.value.trim();
+  const lastName = form.lastName.value.trim();
+  const email = form.email.value.trim().toLowerCase();
+  const classId = form.classId.value;
+  const issueLogin = form.issueLogin.checked;
+  if (!firstName || !lastName || !email || !classId) {
+    state.modalError = "Please fill in every field and choose a class.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const studentId = nextRefId("STU", people.students.map((student) => student.id));
+    await supabaseInsert("students", [
+      {
+        student_id: studentId,
+        first_name: firstName,
+        last_name: lastName,
+        email,
+        status: "Active",
+        class_id: classId,
+        progress: 0,
+        attendance: 0,
+        avg_grade: 0,
+        absences: 0,
+        late: 0,
+      },
+    ]);
+    let notice = `${firstName} ${lastName} was added.`;
+    if (issueLogin) {
+      const result = await callAccountApi({ role: "Student", email, fullName: `${firstName} ${lastName}`, studentRef: studentId });
+      notice += ` Username: ${result.email} · Temporary password: ${result.password}`;
+    }
+    await refreshAfterWrite();
+    state.modalBusy = false;
+    state.modalError = "";
+    state.modalNotice = notice;
+    render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not add the student.";
+    render();
+  }
+}
+
+async function handleAddManager(event) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const email = form.email.value.trim().toLowerCase();
+  if (!name || !email) {
+    state.modalError = "Please add a name and email.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const result = await callAccountApi({ role: "Manager", email, fullName: name });
+    state.modalBusy = false;
+    state.modalError = "";
+    state.modalNotice = `${name} can now sign in as a Manager. Username: ${result.email} · Temporary password: ${result.password}`;
+    render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not add the manager.";
+    render();
+  }
+}
+
+async function handleAddGroup(event, classId) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const memberIds = [...form.querySelectorAll("input[name='members']:checked")].map((input) => input.value);
+  if (!name) {
+    state.modalError = "Please name the group.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const groupId = nextRefId("GRP", groups.map((group) => group.id));
+    await supabaseInsert("groups", [{ group_id: groupId, name, class_id: classId }]);
+    if (memberIds.length) {
+      await supabaseInsert(
+        "group_members",
+        memberIds.map((studentId) => ({ group_id: groupId, student_id: studentId })),
+      );
+    }
+    await refreshAfterWrite();
+    state.modalBusy = false;
+    state.modalError = "";
+    state.modalNotice = `"${name}" was created.`;
+    state.modal = { type: "addGroup", classId };
+    render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not create the group.";
+    render();
+  }
+}
+
+async function handleAddMaterial(event) {
+  event.preventDefault();
+  const form = event.target;
+  const title = form.title.value.trim();
+  const classId = form.classId.value;
+  const groupId = form.groupId.value || null;
+  const file = form.file.files[0];
+  if (!title || !classId || !file) {
+    state.modalError = "Please fill in the title, class, and choose a file.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${classId}/${Date.now()}-${safeName}`;
+    await supabaseUploadFile(path, file);
+    await supabaseInsert("materials", [
+      {
+        title,
+        class_id: classId,
+        group_id: groupId,
+        file_path: path,
+        file_name: file.name,
+        uploaded_by: state.profile?.user_id || null,
+      },
+    ]);
+    await refreshAfterWrite();
+    closeModal();
+    navigate("materials");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not upload the material.";
+    render();
+  }
+}
+
+async function handleAddAssignment(event) {
+  event.preventDefault();
+  const form = event.target;
+  const title = form.title.value.trim();
+  const course = form.course.value.trim();
+  const classId = form.classId.value;
+  const groupId = form.groupId.value || null;
+  const dueDate = form.dueDate.value || null;
+  const maxGrade = Number(form.maxGrade.value) || 100;
+  const difficulty = form.difficulty.value;
+  const cls = classes.find((item) => item.id === classId);
+  if (!title || !course || !cls) {
+    state.modalError = "Please fill in the title, course, and choose a class.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const total = groupId ? groupMembers.filter((m) => m.groupId === groupId).length : studentsInClass(classId).length;
+    await supabaseInsert("assignments", [
+      {
+        title,
+        course,
+        class_name: cls.name,
+        group_id: groupId,
+        due_date: dueDate,
+        status: "Assigned",
+        submissions: 0,
+        total,
+        max_grade: maxGrade,
+        difficulty,
+      },
+    ]);
+    await refreshAfterWrite();
+    closeModal();
+    navigate("assignments");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not create the assignment.";
+    render();
+  }
+}
+
+function materialsView() {
+  // `materials` is already scoped by the "materials scoped read" RLS
+  // policy (0006 migration) at fetch time in loadFromSupabase — a
+  // Student/Parent only ever receives rows for their own class/group, an
+  // Instructor only their own classes, so no extra client-side filtering
+  // is needed here.
+  const canUpload = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
+  const rows = materials;
+
+  return `
+    ${canUpload ? `<div class="toolbar"><button onclick="openModal('addMaterial')">Upload material</button></div>` : ""}
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Shared Materials</h2><span>${rows.length} files</span></div>
+      <table>
+        <thead><tr><th>Title</th><th>Class</th><th>Shared with</th><th>Uploaded</th><th>Action</th></tr></thead>
+        <tbody>
+          ${
+            rows
+              .map((item) => {
+                const cls = classes.find((c) => c.id === item.classId);
+                const group = groups.find((g) => g.id === item.groupId);
+                return `<tr><td><strong>${item.title}</strong><span>${item.fileName}</span></td><td>${cls ? cls.name : item.classId}</td><td>${group ? group.name : "Whole class"}</td><td>${item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "—"}</td><td><button onclick="supabaseDownloadFile('${escapeJs(item.filePath)}', '${escapeJs(item.fileName)}')">Download</button></td></tr>`;
+              })
+              .join("") || `<tr><td colspan="5" class="empty">No materials shared yet.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
 }
 
 function appShell() {
@@ -905,17 +1603,26 @@ const programTracks = [
     name: "Junior Coders",
     age: "Ages 6–9",
     desc: "Block-based coding with Scratch — kids build their first animations and games while learning logic and sequencing.",
+    skills: ["Scratch", "Logic & sequencing", "First animations & games"],
   },
   {
     name: "Code Builders",
     age: "Ages 10–13",
     desc: "Python fundamentals and web basics — real projects kids can show off, from simple apps to their first website.",
+    skills: ["Python basics", "HTML & CSS", "First real projects"],
   },
   {
     name: "Young Developers",
     age: "Ages 14–17",
     desc: "Web and app development, plus game-dev fundamentals — building a portfolio ready for the next step.",
+    skills: ["Web & app development", "Game-dev fundamentals", "Portfolio project"],
   },
+];
+
+const howItWorks = [
+  { step: "1", title: "Book a free trial class", desc: "Send a message or request a call back — we'll find a class time that fits your child's age and schedule." },
+  { step: "2", title: "Quick placement chat", desc: "A short conversation with an instructor makes sure your child starts in the right track for their age and experience." },
+  { step: "3", title: "Start learning, live", desc: "Small live classes with a real instructor — and a parent login so you can follow attendance and progress along the way." },
 ];
 
 const compareRows = [
@@ -949,7 +1656,6 @@ function marketingScreen() {
   const notice = state.contactNotice;
   const reviewNotice = state.reviewNotice;
   const allReviews = [...state.publicReviews, ...sampleReviews];
-  if (!state.promoModalDismissed && promoModalSeen()) state.promoModalDismissed = true;
   const showPromo = !state.promoModalDismissed;
   return `
     <div class="marketing">
@@ -971,6 +1677,7 @@ function marketingScreen() {
           <strong>${school.name}</strong>
         </div>
         <nav class="m-nav-links" aria-label="Marketing navigation">
+          <a href="#how">How it works</a>
           <a href="#features">Programs</a>
           <a href="#compare">Compare</a>
           <a href="#reviews">Reviews</a>
@@ -993,6 +1700,20 @@ function marketingScreen() {
         </div>
       </section>
 
+      <section id="how" class="m-section reveal">
+        <h2>How It Works</h2>
+        <p class="m-sub">Getting started takes three simple steps.</p>
+        <div class="m-cards">
+          ${howItWorks.map((item) => `
+            <article class="m-card reveal">
+              <span class="m-step">${item.step}</span>
+              <h3>${item.title}</h3>
+              <p>${item.desc}</p>
+            </article>
+          `).join("")}
+        </div>
+      </section>
+
       <section id="features" class="m-section reveal">
         <h2>Our Coding Programs</h2>
         <p class="m-sub">Structured tracks by age, so every child starts at the right level.</p>
@@ -1001,6 +1722,7 @@ function marketingScreen() {
             <article class="m-card reveal">
               <h3>${track.name} <span class="m-age">${track.age}</span></h3>
               <p>${track.desc}</p>
+              <div class="m-skills">${track.skills.map((skill) => `<span class="m-skill-tag">${skill}</span>`).join("")}</div>
             </article>
           `).join("")}
         </div>
@@ -1084,28 +1806,12 @@ function marketingScreen() {
   `;
 }
 
-// The "book a trial class" popup shows once per browser session — dismiss
-// state lives in sessionStorage so it reappears on the visitor's next
-// visit instead of nagging repeatedly on every page render this session.
-function promoModalSeen() {
-  try {
-    return sessionStorage.getItem("htaPromoSeen") === "1";
-  } catch {
-    return false;
-  }
-}
-
-function markPromoModalSeen() {
-  try {
-    sessionStorage.setItem("htaPromoSeen", "1");
-  } catch {
-    // Ignore storage errors (private browsing, disabled storage, etc.).
-  }
-}
-
+// The "book a trial class" popup shows on every visit to the homepage
+// (including a plain page refresh) — dismissing it only clears the
+// in-memory flag for the rest of this page load, nothing is remembered
+// in storage, so reloading the page brings it back.
 function dismissPromoModal() {
   state.promoModalDismissed = true;
-  markPromoModalSeen();
   render();
 }
 
@@ -1300,9 +2006,15 @@ function accountsView() {
     }),
   );
 
+  const isManager = ["Super Admin", "School Admin"].includes(state.role);
   return `
     ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
     ${isInstructor ? `<p class="hint">You can issue or reset a login for students in your own classes only. Ask a Manager for instructor accounts.</p>` : ""}
+    <div class="toolbar">
+      ${isManager ? `<button onclick="openModal('addManager')">Add manager</button>` : ""}
+      ${canCreateInstructorProfiles(state.role) ? `<button onclick="openModal('addInstructor')">Add instructor</button>` : ""}
+      ${canCreateStudentProfiles(state.role) ? `<button onclick="openModal('addStudent')">Add student</button>` : ""}
+    </div>
     <section class="panel table-panel">
       <div class="panel-head"><h2>${isInstructor ? "Student Logins" : "Instructor &amp; Student Logins"}</h2><span>${directory ? directory.length : 0} accounts issued</span></div>
       <table>
@@ -1732,11 +2444,26 @@ window.resetCredentials = resetCredentials;
 window.dismissAccountsNotice = dismissAccountsNotice;
 window.dismissPromoModal = dismissPromoModal;
 window.openPromoForm = openPromoForm;
+window.openModal = openModal;
+window.closeModal = closeModal;
+window.handleAddClass = handleAddClass;
+window.handleAddInstructor = handleAddInstructor;
+window.handleAddStudent = handleAddStudent;
+window.handleAddManager = handleAddManager;
+window.handleAddGroup = handleAddGroup;
+window.handleAddMaterial = handleAddMaterial;
+window.handleAddAssignment = handleAddAssignment;
+window.renderModalGroupOptions = renderModalGroupOptions;
+window.renderAssignmentGroupOptions = renderAssignmentGroupOptions;
+window.supabaseDownloadFile = supabaseDownloadFile;
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && !state.promoModalDismissed && state.authMode === "marketing") {
+  if (event.key !== "Escape") return;
+  if (!state.promoModalDismissed && state.authMode === "marketing") {
     dismissPromoModal();
+    return;
   }
+  if (state.modal) closeModal();
 });
 
 // Registered once, not per-render: re-queries the nav each scroll instead

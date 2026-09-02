@@ -13,26 +13,43 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
-  "School Admin": ["dashboard", "students", "families", "classes", "assignments", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews"],
-  Instructor: ["dashboard", "students", "classes", "assignments", "attendance", "communications", "notifications", "accounts"],
-  Student: ["dashboard", "assignments", "attendance", "communications", "notifications"],
-  Parent: ["dashboard", "students", "assignments", "attendance", "communications", "notifications"],
+  "Super Admin": ["dashboard", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
+  "School Admin": ["dashboard", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews"],
+  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "communications", "notifications", "accounts"],
+  Student: ["dashboard", "assignments", "materials", "attendance", "communications", "notifications"],
+  Parent: ["dashboard", "students", "assignments", "materials", "attendance", "communications", "notifications"],
 };
 
-// Manager (Super Admin or School Admin) can issue both Instructor and
+// Manager (Super Admin or School Admin) can issue Manager, Instructor, and
 // Student logins. Instructor can issue Student logins only, and only for
 // students in their own classes (the class scoping itself is enforced by
 // the caller using filterStudentsForViewer + the server in
 // api/create-account.js, which re-checks everything with the service key).
+// A Manager-issued "Manager" login always becomes the underlying "School
+// Admin" role, never a second "Super Admin" — self-service creation of
+// another Super Admin is never offered anywhere in the UI or API.
 export function canManageAnyAccounts(role) {
   return ["Super Admin", "School Admin", "Instructor"].includes(role);
 }
 
 export function issuableRolesFor(role) {
-  if (["Super Admin", "School Admin"].includes(role)) return ["Instructor", "Student"];
+  if (["Super Admin", "School Admin"].includes(role)) return ["Manager", "Instructor", "Student"];
   if (role === "Instructor") return ["Student"];
   return [];
+}
+
+// Can this role create brand-new Instructor / Student / Class / Group /
+// Assignment records (not just issue a login for one that already exists)?
+export function canCreateInstructorProfiles(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+export function canCreateClasses(role) {
+  return ["Super Admin", "School Admin", "Instructor"].includes(role);
+}
+
+export function canCreateStudentProfiles(role) {
+  return ["Super Admin", "School Admin", "Instructor"].includes(role);
 }
 
 export function canAccessModule(role, moduleId) {

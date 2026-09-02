@@ -1,10 +1,11 @@
 # Security Test Report
 
-Date: 2026-08-30
+Date: 2026-09-02
 
 ## Result
 
-Passed: 21 / 21 automated tests.
+Passed: 21 / 21 automated tests (one assertion updated to match the new
+`issuableRolesFor()` behavior below; test count unchanged).
 
 Commands run:
 
@@ -39,15 +40,25 @@ Commands run:
   `dismissReviewNotice` had no button wired to them) and fixed by adding a
   dismiss button to both the contact and review success/error banners.
 - A second Playwright pass clicked through every reachable control on the
-  homepage in one run: all four nav anchor links scroll to their section;
-  the new "book a trial class" popup opens on load, closes via its ✕
-  button, a click outside itself, and the Escape key, stays dismissed for
-  the rest of that browser session (`sessionStorage`), reappears in a
-  fresh session, and its **Fill the form** button scrolls to and focuses
-  the Contact form's name field; both the Contact and Leave-a-review forms
-  submit and their new dismiss buttons clear the notice; and Login ->
-  "not connected yet" -> Back to homepage all round-trip cleanly. Zero
-  console or page errors across the whole run.
+  homepage in one run: all five nav anchor links (including the new "How
+  it works" link) scroll to their section; the "book a trial class" popup
+  opens on load, closes via its ✕ button, a click outside itself, and the
+  Escape key, and its **Fill the form** button scrolls to and focuses the
+  Contact form's name field; both the Contact and Leave-a-review forms
+  submit and their dismiss buttons clear the notice; and Login -> "not
+  connected yet" -> Back to homepage all round-trip cleanly. Zero console
+  or page errors across the whole run.
+- A third Playwright pass (this update) confirmed the popup no longer
+  persists a dismissal anywhere: it shows on first load, is dismissible,
+  and **reappears after a full page reload** — `sessionStorage` is no
+  longer used for it at all, matching the "pop up appear with refresh"
+  request. Zero console or page errors.
+- A repeat of the full inline-handler audit (static, not just the earlier
+  manual click-through) after adding the dashboard modals, Materials
+  view, and all new `handleAdd*`/`openModal`/`closeModal` functions: every
+  `onclick`/`onsubmit`/`onchange` call target in `src/app.js` was
+  cross-checked against `window.*` exports in both directions. No dead
+  handlers found.
 
 ## What Was Tested
 
@@ -80,10 +91,26 @@ Commands run:
   status.
 - `api/create-account.js` re-derives the caller's role from their own
   authenticated profile row (never trusts a role claimed by the browser),
-  rejects an Instructor issuing anything but a Student account, and
+  rejects an Instructor issuing anything but a Student account, rejects
+  anyone but a Manager issuing a Manager (`School Admin`) account, and
   re-verifies that an Instructor's target student is in one of that
   instructor's own classes before issuing or resetting anything.
 - Generated temporary passwords are 14 characters, include lower/upper/digit/symbol classes, exclude visually ambiguous characters, and are never repeated across 50 generations.
+- `issuableRolesFor()` returns `["Manager", "Instructor", "Student"]` for
+  a Manager and `["Student"]` for an Instructor — a Manager option is
+  never offered to anyone but a Manager, in the UI or the underlying
+  permission helper.
+- Migration `0006`'s new instructor-write policies on `classes` and
+  `students` are scoped with the same `profile.instructor_name = ...`
+  join pattern already used by the existing (and already-tested)
+  `assignments` write policy — an Instructor's insert/update is rejected
+  by Postgres itself unless the row's `instructor` / `class_id` resolves
+  back to their own `user_profiles.instructor_name`.
+- `groups`, `group_members`, and `materials` read policies all resolve
+  through `public.can_view_student()` for a Student/Parent, so the same
+  scoping already relied on everywhere else in the schema (own record,
+  linked children, own class) governs who can see a group's membership or
+  a shared file — not a new, separately-reasoned-about check.
 
 ## Separation Model
 
@@ -123,11 +150,13 @@ Database:
 
 Account issuance:
 
-- A Manager session can create or reset an Instructor or Student login. An
-  Instructor session can create or reset a Student login **only for
-  students in their own classes** — both are re-checked server-side
-  (`api/create-account.js`) with the Supabase `service_role` key rather
-  than trusted from the client.
+- A Manager session can create or reset a Manager, Instructor, or Student
+  login. An Instructor session can create or reset a Student login **only
+  for students in their own classes** — all of this is re-checked
+  server-side (`api/create-account.js`) with the Supabase `service_role`
+  key rather than trusted from the client. A "Manager" role is always
+  aliased server-side to the underlying `School Admin` role; a second
+  `Super Admin` is never issuable from anywhere in the app or the API.
 - The Instructor scoping check cross-references `students.class_id`
   against the classes returned for `classes.instructor = <caller's
   instructor_name>`; a mismatch (or a caller with no linked instructor
@@ -143,3 +172,30 @@ the accounts migration (`0003`), the contact-requests migration (`0004`),
 and the reviews migration (`0005`), and require Supabase Auth before
 adding private student or parent records, issuing real logins, or
 collecting real contact-form or review submissions.
+
+## Not Yet Verified Live (Classes/Groups/Materials/Assignments, migration `0006`)
+
+This environment cannot reach the project's Supabase or Vercel APIs at
+all (an organization-level network policy rejects the connection outright
+— confirmed with direct connection tests, not assumed), so the new
+"Add class / instructor / student / manager / group / material /
+assignment" flows could only be verified the way described above: syntax
+checks (`node --check`), the full automated test suite (`npm test`,
+21/21), a production build (`npm run build`), a static cross-check of
+every new `onclick`/`onsubmit`/`onchange` handler against its `window.*`
+export, and a Playwright pass confirming the popup-on-refresh change and
+that the rest of the marketing homepage still has zero console errors.
+
+What this update could **not** test end-to-end, because it requires a
+live Supabase project and a live Vercel deployment: actually running
+`0006_instructor_operations.sql`, creating a class/instructor/student/
+manager/group/material/assignment through the new dashboard forms and
+confirming the RLS policies behave as written (an Instructor's insert
+being accepted for their own class and rejected for someone else's), and
+downloading an uploaded file back out of the `materials` Storage bucket.
+Please run migration `0006` and click through each new "Add ..." button
+once as a Manager and once as an Instructor test account before relying
+on this in production — and see the note at the bottom of
+`0006_instructor_operations.sql` about the Materials Storage bucket being
+scoped per-class rather than per-group, which is a deliberate scope
+trade-off, not an oversight.

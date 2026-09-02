@@ -13,12 +13,19 @@ These are the logins staff and students use once they're enrolled — not
 something sold to other schools:
 
 - **Manager** (Super Admin / School Admin under the hood) — full school
-  operations. Creates both Instructor and Student accounts, manages
-  classes, reports, settings, incoming Contact Requests, and Reviews.
-- **Instructor** — manages their assigned classes and can create/reset
-  **Student** accounts, but only for students in their own classes.
-- **Student** — signs in to see their own assignments, attendance, and
-  grades.
+  operations. Creates Manager, Instructor, and Student accounts, adds new
+  instructor and student profiles (not just logins for existing ones),
+  manages classes, groups, materials, assignments, reports, settings,
+  incoming Contact Requests, and Reviews. A Manager-issued "Manager"
+  login is always the `School Admin` role under the hood — nobody can
+  self-service a second `Super Admin` from the UI or the API.
+- **Instructor** — manages their assigned classes: can create new classes
+  (self-assigned), create new Student profiles and issue their logins
+  (only for students in their own classes), split a class into Groups,
+  upload Materials for a class or a specific group, and create
+  Assignments (optionally scoped to one group).
+- **Student** — signs in to see their own assignments, attendance,
+  grades, and any Materials shared with their class or their group.
 
 (There is also an optional Parent/Guardian role inherited from the
 original build, kept in case it's useful later — it isn't one of the
@@ -29,14 +36,16 @@ three account types issued from Accounts & Logins.)
 Opening the site shows the public homepage first — a hero pitched at
 parents ("Where Kids Learn to Code, Create, and Build Real Projects"), a
 trust stats strip (**60+ students trained so far**, ages served, live
-instructor-led format), an **Our Coding Programs** section broken out by
-age band, a comparison section against generic alternatives (pre-recorded
-video courses, one-off workshops), a reviews section from parents and
-students, a **Contact us / Request a call** form, and links to the
-school's Facebook page and WhatsApp — with a **Login** button in the
-header for staff/students/parents who already have portal accounts, and a
-"book a trial class" popup (image + one button) that appears once per
-visitor session and jumps straight to the Contact form.
+instructor-led format), a **How It Works** 3-step section, an **Our
+Coding Programs** section broken out by age band (with a short skill-tag
+list per track), a comparison section against generic alternatives
+(pre-recorded video courses, one-off workshops), a reviews section from
+parents and students, a **Contact us / Request a call** form, and links
+to the school's Facebook page and WhatsApp — with a **Login** button in
+the header for staff/students/parents who already have portal accounts,
+and a "book a trial class" popup (image + one button) that appears on
+every visit — including a plain page refresh — and jumps straight to the
+Contact form.
 
 - `programTracks`, `sampleReviews`, and `compareRows` in `src/app.js` hold
   starter content — real course tracks, real reviews, and real comparison
@@ -46,13 +55,14 @@ visitor session and jumps straight to the Contact form.
 - `trustStats` in `src/app.js` holds the "60+ students trained" stat strip
   — update the numbers there as your real enrollment grows.
 - The homepage popup (`src/assets/promo-different-start.jpg`, shown via
-  the `promo-overlay` markup in `marketingScreen()`) shows once per
-  browser session (tracked in `sessionStorage`, not a server-side setting)
-  and its **Fill the form** button scrolls straight to the real Contact
-  form below — submissions land in the same **Contact Requests** panel
-  every Manager already has, so there's nothing extra to check. Swap the
-  image or copy any time by editing that file and the `promo-modal-body`
-  text in `src/app.js`.
+  the `promo-overlay` markup in `marketingScreen()`) shows on every visit
+  to the homepage, including a plain page refresh — dismissing it only
+  clears an in-memory flag for that page load, nothing is remembered in
+  storage. Its **Fill the form** button scrolls straight to the real
+  Contact form below — submissions land in the same **Contact Requests**
+  panel every Manager already has, so there's nothing extra to check.
+  Swap the image or copy any time by editing that file and the
+  `promo-modal-body` text in `src/app.js`.
 - Real reviews: any visitor can submit a review from the **Leave a
   review** form on the homepage. Submissions land as `pending` in a
   Supabase table (`reviews`, see migration `0005`) and are invisible to
@@ -67,6 +77,38 @@ visitor session and jumps straight to the Contact form.
   **Contact Requests** panel inside the app. Without Supabase configured,
   both the contact form and the review form just show a local "thanks"
   message instead of failing.
+
+## Classes, Groups, Materials, and Assignments (needs migration `0006`)
+
+Once `0006_instructor_operations.sql` has run, a Manager or Instructor can
+do real day-to-day class operations from the dashboard instead of just
+viewing pre-loaded data:
+
+- **Classes** (Courses and Classes -> **New class**): create a class and
+  self-assign an instructor. Instructors can only create classes assigned
+  to themselves; Managers can assign any instructor.
+- **Instructors** (Accounts & Logins -> **Add instructor**, Manager only):
+  creates a real instructor record and, if left checked, issues their
+  first login in the same step.
+- **Students** (Courses and Classes or Accounts & Logins -> **Add
+  student**): creates a real student record in a chosen class and, if
+  left checked, issues their first login. Instructors can only add
+  students to their own classes.
+- **Managers** (Accounts & Logins -> **Add manager**, Manager only):
+  issues another Manager login — always the underlying `School Admin`
+  role.
+- **Groups** (a class tile's **Manage groups** button): split a class
+  into smaller groups and pick which students belong to each one.
+- **Materials** (**Materials** in the sidebar -> **Upload material**):
+  upload a file for a class, optionally scoped to one group, into a
+  private Supabase Storage bucket; students/parents only ever see the
+  materials their own class or group RLS policy allows.
+- **Assignments** (Assignment Center -> **New assignment**): create an
+  assignment for a class, optionally scoped to one group.
+
+All of this is enforced with real row-level security, not just hidden
+buttons — see "Groups, Materials, and Group-Scoped Assignments" in
+`docs/architecture.md` for exactly which policies back each action.
 
 ## Local Checks
 
@@ -95,6 +137,11 @@ For real school data with real logins, also run, in order:
 4. `supabase/migrations/0003_auth_accounts.sql`
 5. `supabase/migrations/0004_contact_requests.sql`
 6. `supabase/migrations/0005_reviews.sql`
+7. `supabase/migrations/0006_instructor_operations.sql` — adds Groups,
+   Materials, and lets Instructors create their own classes/students (see
+   "Classes, Groups, Materials, and Assignments" above). Safe to run any
+   time after `0002`; everything already using this app keeps working
+   without it, it just won't have these newer features yet.
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`
 so someone can sign in and start issuing Instructor/Student credentials.
@@ -131,10 +178,10 @@ homepage first; clicking **Login**:
 
 Once connected:
 
-- A Manager issues an Instructor's or Student's first username and
-  password from **Accounts & Logins**. An Instructor can do the same, but
-  only for Students in their own classes. The temporary password is shown
-  once — share it with that person right away.
+- A Manager issues a Manager's, Instructor's, or Student's first username
+  and password from **Accounts & Logins**. An Instructor can do the same,
+  but only for Students in their own classes. The temporary password is
+  shown once — share it with that person right away.
 - Everyone is required to set their own password the first time they sign
   in with a temporary one.
 

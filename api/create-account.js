@@ -1,6 +1,11 @@
 import { generatePassword } from "./_lib/password.js";
 
-const ISSUABLE_ROLES = ["Student", "Instructor"];
+const ISSUABLE_ROLES = ["Student", "Instructor", "School Admin"];
+
+// The UI only ever talks about "Manager" as an account type — it always
+// maps to the underlying "School Admin" role. A second "Super Admin" is
+// never issuable from here, on purpose.
+const ROLE_ALIASES = { Manager: "School Admin" };
 
 function jsonError(res, status, error, detail) {
   res.status(status).json(detail ? { error, detail } : { error });
@@ -83,18 +88,22 @@ export default async function handler(req, res) {
 
   // 3. Validate the request.
   const body = await readJsonBody(req);
-  const role = body.role;
+  const role = ROLE_ALIASES[body.role] || body.role;
   const email = String(body.email || "").trim().toLowerCase();
   const fullName = body.fullName ? String(body.fullName).trim() : null;
   const studentRef = role === "Student" ? String(body.studentRef || "").trim() : null;
   const instructorRef = role === "Instructor" ? String(body.instructorRef || "").trim() : null;
 
   if (!ISSUABLE_ROLES.includes(role)) {
-    jsonError(res, 400, "role must be 'Student' or 'Instructor'.");
+    jsonError(res, 400, "role must be 'Student', 'Instructor', or 'Manager'.");
     return;
   }
   if (callerIsInstructor && role !== "Student") {
     jsonError(res, 403, "Instructors can only issue or reset Student logins.");
+    return;
+  }
+  if (role === "School Admin" && !callerIsManager) {
+    jsonError(res, 403, "Only a Manager can issue another Manager login.");
     return;
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -107,6 +116,10 @@ export default async function handler(req, res) {
   }
   if (role === "Instructor" && !instructorRef) {
     jsonError(res, 400, "instructorRef is required for an Instructor account.");
+    return;
+  }
+  if (role === "School Admin" && !fullName) {
+    jsonError(res, 400, "fullName is required for a Manager account.");
     return;
   }
 
@@ -139,10 +152,14 @@ export default async function handler(req, res) {
   }
 
   // 4. Is this a brand-new login, or a password reset for an existing one?
+  // Student/Instructor accounts are keyed to their school record; a Manager
+  // account has no such record, so it's keyed to its email instead.
   const existingFilter =
     role === "Student"
       ? `student_id=eq.${encodeURIComponent(studentRef)}`
-      : `instructor_name=eq.${encodeURIComponent(instructorRef)}`;
+      : role === "Instructor"
+        ? `instructor_name=eq.${encodeURIComponent(instructorRef)}`
+        : `email=eq.${encodeURIComponent(email)}&role=eq.${encodeURIComponent("School Admin")}`;
   const existingResponse = await fetch(
     `${base}/rest/v1/user_profiles?${existingFilter}&select=user_id,email`,
     { headers: serviceHeaders },

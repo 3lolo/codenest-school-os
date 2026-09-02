@@ -34,11 +34,19 @@ existing granularity:
 
 - Super Admin / School Admin (both shown as **Manager**): full school
   operations. Only Super Admin can reach platform Settings and Audit Logs.
+  A Manager can also issue a login for another **Manager** — always
+  created as the underlying `School Admin` role, never a second
+  `Super Admin`, so nobody can self-service the top tier from the UI or
+  the API.
 - Instructor: assigned classes, students in assigned classes, attendance,
-  assignments, grading, related parent contact data. Can also create or
-  reset **Student** logins, but only for students in their own classes.
+  assignments, grading, related parent contact data. Can create new
+  classes (self-assigned), create new Student profiles and issue their
+  logins, create Groups within their own classes, upload Materials, and
+  create Assignments — all scoped to their own classes at the database
+  level (`supabase/migrations/0006_instructor_operations.sql`), not just
+  in the UI.
 - Student: own profile, own enrollments, own assignments, own grades, own
-  attendance, learning resources.
+  attendance, learning resources shared with their class or their group.
 - Parent or Guardian: only linked children and communications addressed to
   the family (kept for schools that want it; not one of the three issued
   account types).
@@ -52,18 +60,30 @@ Recommended implementation:
 
 ### Credential Issuance
 
-Every Instructor and Student signs in with their own Supabase Auth
-username (email) and password instead of a shared/preview identity:
+Every Manager, Instructor, and Student signs in with their own Supabase
+Auth username (email) and password instead of a shared/preview identity:
 
 - A **Manager** issues the first login for anyone from the Accounts &
-  Logins panel — Instructor or Student. An **Instructor** can also open
-  Accounts & Logins, but it only lists (and only lets them issue/reset
-  logins for) students in their own classes.
+  Logins panel — Manager, Instructor, or Student. An **Instructor** can
+  also open Accounts & Logins, but it only lists (and only lets them
+  issue/reset logins for) students in their own classes.
 - The server (`api/create-account.js`) re-verifies the caller's role with
   the `service_role` key before doing anything — the browser's claimed
   role is never trusted. When the caller is an Instructor, it additionally
   re-checks that the target student's `class_id` is one of that
-  instructor's own classes before issuing or resetting anything.
+  instructor's own classes before issuing or resetting anything. A
+  "Manager" role from the client is always aliased server-side to the
+  underlying `School Admin` role, and only an existing Manager can issue
+  one — an Instructor cannot, no matter what the request claims.
+- Creating a brand-new Instructor or Student *profile* (not just a login
+  for one that already exists) is a separate step: the "Add instructor" /
+  "Add class" / "Add student" forms in the dashboard insert directly into
+  `instructors` / `classes` / `students` using the signed-in user's own
+  Supabase session — allowed only where RLS already permits it (Manager
+  for any row, Instructor only for rows tied to their own classes; see
+  `0002_production_rls.sql` and `0006_instructor_operations.sql`) — and
+  then optionally call the same account-issuance endpoint to give that
+  new profile its first login.
 - A temporary password is generated server-side (`api/_lib/password.js`),
   shown once in the UI, and never stored in plain text.
 - Every new or reset account is flagged `must_change_password`; the person
@@ -71,7 +91,30 @@ username (email) and password instead of a shared/preview identity:
 - `user_profiles.student_id` / `user_profiles.instructor_name` link the
   auth user to their school record, which the existing row-level security
   policies (see `supabase/migrations/0002_production_rls.sql`) already key
-  off of.
+  off of. A Manager account has no such record — it's linked by `email`
+  alone.
+
+### Groups, Materials, and Group-Scoped Assignments
+
+Added in `supabase/migrations/0006_instructor_operations.sql`:
+
+- **Groups** (`groups`, `group_members`): an Instructor (or Manager) can
+  split a class into smaller groups and assign students to them. Reads
+  and writes are scoped to the class's own instructor (or a Manager); a
+  Student/Parent can read a group only if one of their own linked
+  students is a member of it.
+- **Materials** (`materials` table + a private `materials` Storage
+  bucket): an Instructor (or Manager) uploads a file, tags it with a
+  class and optionally one group, and it becomes downloadable to whoever
+  the `materials` table's RLS policy says can see that class/group. The
+  Storage bucket itself is only scoped one class at a time (objects live
+  under `<class_id>/<file>`), not per-group — see the note at the bottom
+  of the migration for what that trade-off means and how to tighten it
+  later if it matters in practice.
+- **Assignments** gained an optional `group_id` so a single assignment
+  can target one group instead of the whole class; the existing
+  Instructor-write policy on `assignments` did not need to change, only
+  the read policy did.
 
 ## Marketing Homepage
 
@@ -84,18 +127,23 @@ internal operations side, not the homepage's sales pitch. It covers:
 
 - Hero copy aimed at parents ("Where Kids Learn to Code, Create, and
   Build Real Projects"), a `trustStats` strip (60+ students trained so
-  far, ages served, live instructor-led format), and an "Our Coding
-  Programs" section (`programTracks`) broken out by age band — clearly
-  labeled as sample content to replace with the real curriculum.
-- A sample "how it compares" section (`compareRows`) — against generic
+  far, ages served, live instructor-led format), a "How It Works" 3-step
+  section (`howItWorks`), and an "Our Coding Programs" section
+  (`programTracks`, with a short skill-tag list per track) broken out by
+  age band. None of this is labeled "sample" on the live site itself —
+  that context lives only in code comments for whoever edits the file
+  next — so replace the copy with the school's real curriculum whenever
+  it's ready, without it ever looking like placeholder content to a
+  visiting parent.
+- A "how it compares" section (`compareRows`) — against generic
   alternatives (pre-recorded video courses, one-off workshops) from a
-  parent's buying perspective — clearly labeled as sample content to
-  replace.
+  parent's buying perspective.
 - A reviews section that renders `[...state.publicReviews, ...sampleReviews]`
-  — real, Manager-approved reviews first, then the clearly-tagged sample
-  reviews (three English, two Arabic) as filler until real ones exist.
-  Quotes render with `dir="auto"` so Arabic and English both display with
-  correct text direction.
+  — real, Manager-approved reviews first, then starter reviews (three
+  English, two Arabic) as filler until enough real ones exist, with no
+  "sample" label shown to visitors either way. Quotes render with
+  `dir="auto"` so Arabic and English both display with correct text
+  direction.
 - A public "Leave a review" form (`handleReviewSubmit()`) that inserts
   into `public.reviews` (migration `0005_reviews.sql`) using the anon key
   under an insert-only RLS policy restricted to `status = 'pending'`.
@@ -117,10 +165,15 @@ Supabase is configured. There is no demo/preview mode — until Supabase is
 connected, **Login** shows a plain "not connected yet" screen instead of a
 dashboard, and every list in the app (students, classes, assignments,
 etc.) starts empty rather than shipping with fabricated sample rows. The
-only sample content left is the clearly-labeled sections on the marketing
-homepage itself (`programTracks`, `sampleReviews`, `compareRows`), plus
-the `trustStats` numbers, which should be updated as real enrollment
-grows past the current 60+ students trained.
+homepage's own starter content (`programTracks`, `howItWorks`,
+`sampleReviews`, `compareRows`, `trustStats`) is the only content that
+ships before Supabase has real rows to show — update it (especially the
+`trustStats` numbers) as real enrollment grows past the current 60+
+students trained. The homepage popup (`promo-overlay` in
+`marketingScreen()`) shows on every visit, including a plain page
+refresh — it does not remember a dismissal in storage — so update
+`src/assets/promo-different-start.jpg` and the modal copy any time
+without worrying about visitors having "already seen" the old version.
 
 ## Notification Architecture
 

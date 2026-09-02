@@ -1407,3 +1407,177 @@ code {
     font-size: 32px;
   }
 }
+
+/* ---------- Dashboard modals (Add Class / Instructor / Student / Manager / Group / Material / Assignment) ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(23, 28, 38, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 60;
+  animation: promo-fade-in 0.2s ease-out;
+}
+
+.modal-box {
+  position: relative;
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  width: min(480px, 100%);
+  max-height: 90vh;
+  overflow: auto;
+  padding: 24px;
+  display: grid;
+  gap: 14px;
+  animation: promo-pop-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.modal-box h2 {
+  margin: 0;
+  padding-right: 24px;
+}
+
+.modal-box form {
+  display: grid;
+  gap: 12px;
+}
+
+.modal-box label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.modal-box label.checkline {
+  grid-template-columns: 18px 1fr;
+  align-items: center;
+  color: var(--ink);
+  font-weight: 400;
+}
+
+.modal-box label.checkline input {
+  width: auto;
+}
+
+.modal-box input,
+.modal-box select,
+.modal-box textarea {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+  width: 100%;
+}
+
+.modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  border-radius: 999px;
+  border: none;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 18px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.modal-actions button {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  min-height: 42px;
+  padding: 0 18px;
+}
+
+.modal-checklist {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.modal-checklist legend {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.modal-existing-list {
+  display: grid;
+  gap: 8px;
+}
+
+.modal-existing-row {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+
+.modal-existing-row span {
+  color: var(--muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-box,
+  .modal-overlay {
+    animation: none !important;
+  }
+}
+
+/* ---------- "How It Works" steps + program skill tags ---------- */
+
+.m-step {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: var(--brand);
+  color: #fff;
+  font-weight: 800;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.m-skills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.m-skill-tag {
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-dark);
+}

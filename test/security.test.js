@@ -97,15 +97,15 @@ test("roleLabel presents Super Admin and School Admin as Manager, leaves other r
   assert.equal(roleLabel("Parent"), "Parent");
 });
 
-test("account issuance: managers can issue Instructor and Student logins, instructors only Student", () => {
+test("account issuance: managers can issue Manager, Instructor, and Student logins, instructors only Student", () => {
   assert.equal(canManageAnyAccounts("Super Admin"), true);
   assert.equal(canManageAnyAccounts("School Admin"), true);
   assert.equal(canManageAnyAccounts("Instructor"), true);
   assert.equal(canManageAnyAccounts("Student"), false);
   assert.equal(canManageAnyAccounts("Parent"), false);
 
-  assert.deepEqual(issuableRolesFor("Super Admin"), ["Instructor", "Student"]);
-  assert.deepEqual(issuableRolesFor("School Admin"), ["Instructor", "Student"]);
+  assert.deepEqual(issuableRolesFor("Super Admin"), ["Manager", "Instructor", "Student"]);
+  assert.deepEqual(issuableRolesFor("School Admin"), ["Manager", "Instructor", "Student"]);
   assert.deepEqual(issuableRolesFor("Instructor"), ["Student"]);
   assert.deepEqual(issuableRolesFor("Student"), []);
 });
