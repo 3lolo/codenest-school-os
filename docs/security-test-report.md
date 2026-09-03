@@ -1,11 +1,49 @@
 # Security Test Report
 
-Date: 2026-09-02
+Date: 2026-09-03
 
 ## Result
 
 Passed: 21 / 21 automated tests (one assertion updated to match the new
 `issuableRolesFor()` behavior below; test count unchanged).
+
+## This Update: Instructors Tab + Fixed a Real Bootstrap Dead End
+
+A Manager reported "I cannot add student." Tracing it through: the "Add
+student" form required picking an existing class from a dropdown, and the
+"Add class" form required picking an existing instructor from a dropdown
+— on a brand-new school with nothing created yet, both dropdowns start
+empty, so a required `<select>` with zero options can never be submitted.
+That's a real usability dead end, not a permissions bug (a Manager's
+Supabase session was never actually blocked by RLS from any of these
+inserts).
+
+Fixed by:
+
+- Adding a dedicated **Instructors** tab (Manager-only, positioned above
+  Students in the sidebar) with its own **Add instructor** entry point
+  that has no dependency on anything else existing first — this is now
+  the natural first step on a new school.
+- When "Add a class" is opened with zero instructors, or "Add a
+  student"/"Upload material"/"New assignment" is opened with zero classes
+  available to the current viewer, the modal now shows a plain-language
+  explanation and a button straight to the form that unblocks it
+  (`emptyDependencyNotice()` in `src/app.js`), instead of a dead-end empty
+  required dropdown that looks like a broken button.
+- Instructor logins moved off the general Accounts & Logins panel onto
+  the new Instructors tab, so a Manager has one obvious place per account
+  type: Instructors tab for instructors, Accounts & Logins for students
+  and other managers.
+
+Re-verified after this change: `node --check` on every touched file,
+`npm test` (21/21), `npm run build`, the static onclick/onsubmit/onchange
+-to-`window.*` export cross-check (no dead handlers), and a Playwright
+pass confirming the marketing homepage and popup-on-refresh behavior are
+unaffected with zero console errors. The dependency-notice branches
+themselves (what a Manager actually sees stepping through Instructors ->
+Classes -> Students with a fresh, empty school) still need a live
+click-through against a real Supabase project — see "Not Yet Verified
+Live" below, which now also covers this.
 
 Commands run:
 

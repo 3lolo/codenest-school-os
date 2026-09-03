@@ -84,12 +84,15 @@ Once `0006_instructor_operations.sql` has run, a Manager or Instructor can
 do real day-to-day class operations from the dashboard instead of just
 viewing pre-loaded data:
 
+- **Instructors** (its own **Instructors** tab in the sidebar, right
+  above Students — Manager only): lists every instructor with their
+  classes and portal-access status, and **Add instructor** creates a real
+  instructor record, issuing their first login in the same step if left
+  checked. Do this first on a brand-new school — classes need an
+  instructor to assign, so this is the natural starting point.
 - **Classes** (Courses and Classes -> **New class**): create a class and
   self-assign an instructor. Instructors can only create classes assigned
-  to themselves; Managers can assign any instructor.
-- **Instructors** (Accounts & Logins -> **Add instructor**, Manager only):
-  creates a real instructor record and, if left checked, issues their
-  first login in the same step.
+  to themselves; Managers pick from any existing instructor.
 - **Students** (Courses and Classes or Accounts & Logins -> **Add
   student**): creates a real student record in a chosen class and, if
   left checked, issues their first login. Instructors can only add
@@ -105,6 +108,14 @@ viewing pre-loaded data:
   materials their own class or group RLS policy allows.
 - **Assignments** (Assignment Center -> **New assignment**): create an
   assignment for a class, optionally scoped to one group.
+
+**Order matters on a brand-new school**: Add an instructor first, then a
+class (it needs an instructor to assign), then students/groups/materials/
+assignments (they need a class to belong to). If you open "Add a class"
+with zero instructors yet, or "Add a student"/"Upload material"/"New
+assignment" with zero classes yet, the dashboard shows what to create
+first instead of a dead-end empty dropdown — click through that prompt
+rather than assuming the button is broken.
 
 All of this is enforced with real row-level security, not just hidden
 buttons — see "Groups, Materials, and Group-Scoped Assignments" in

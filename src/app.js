@@ -55,6 +55,7 @@ const dataSource = {
 
 const navItems = [
   ["dashboard", "Dashboard", "grid"],
+  ["instructors", "Instructors", "users"],
   ["students", "Students", "users"],
   ["families", "Families", "home"],
   ["classes", "Classes", "layers"],
@@ -129,7 +130,7 @@ function navigate(view) {
   if (!can(view)) return;
   state.view = view;
   render();
-  if (view === "accounts" && canManageAccounts()) {
+  if ((view === "accounts" || view === "instructors") && canManageAccounts()) {
     loadAccountsDirectory().then(renderContentOnly);
   }
   if (view === "leads" && canManageAccounts()) {
@@ -227,6 +228,7 @@ function shell() {
 function titleForView() {
   return {
     dashboard: `${roleLabel(state.role)} Dashboard`,
+    instructors: "Instructor Management",
     students: state.role === "Parent" ? "Linked Children" : "Student Management",
     families: "Family Management",
     classes: "Courses and Classes",
@@ -248,6 +250,7 @@ function content() {
   if (state.query) return searchResults();
   return {
     dashboard: dashboard(),
+    instructors: instructorsView(),
     students: students(),
     families: families(),
     classes: classesView(),
@@ -525,9 +528,8 @@ function classesView() {
 }
 
 function assignmentsView() {
-  const canAdd = classesForViewer().length > 0;
   return `
-    <div class="toolbar">${canAdd ? `<button onclick="openModal('addAssignment')">New assignment</button>` : ""}</div>
+    <div class="toolbar"><button onclick="openModal('addAssignment')">New assignment</button></div>
     ${assignmentPanel()}
   `;
 }
@@ -1014,6 +1016,14 @@ function modalBody(modal) {
 
 function addClassModal() {
   const isInstructor = state.role === "Instructor";
+  if (!isInstructor && people.instructors.length === 0) {
+    return emptyDependencyNotice(
+      "Add a class",
+      "You need at least one instructor before you can create a class — add one first, then come back to create the class and assign it to them.",
+      "Add an instructor",
+      "addInstructor",
+    );
+  }
   const instructorOptions = people.instructors
     .map((instructor) => `<option value="${instructor.name}">${instructor.name}</option>`)
     .join("");
@@ -1055,7 +1065,18 @@ function addInstructorModal() {
 
 function addStudentModal() {
   const isInstructor = state.role === "Instructor";
-  const classOptions = classesForViewer()
+  const availableClasses = classesForViewer();
+  if (availableClasses.length === 0) {
+    return emptyDependencyNotice(
+      "Add a student",
+      isInstructor
+        ? "You need at least one of your own classes before you can add a student — create a class first, then come back to add the student to it."
+        : "You need at least one class before you can add a student — create a class first, then come back to add the student to it.",
+      "Add a class",
+      "addClass",
+    );
+  }
+  const classOptions = availableClasses
     .map((item) => `<option value="${item.id}">${item.name}</option>`)
     .join("");
   return `
@@ -1129,7 +1150,16 @@ function addGroupModal(modal) {
 }
 
 function addMaterialModal() {
-  const classOptions = classesForViewer()
+  const availableClasses = classesForViewer();
+  if (availableClasses.length === 0) {
+    return emptyDependencyNotice(
+      "Upload material",
+      "You need at least one class before you can upload material for it — create a class first.",
+      "Add a class",
+      "addClass",
+    );
+  }
+  const classOptions = availableClasses
     .map((item) => `<option value="${item.id}">${item.name}</option>`)
     .join("");
   return `
@@ -1157,7 +1187,16 @@ function renderModalGroupOptions(classId) {
 }
 
 function addAssignmentModal() {
-  const classOptions = classesForViewer()
+  const availableClasses = classesForViewer();
+  if (availableClasses.length === 0) {
+    return emptyDependencyNotice(
+      "New assignment",
+      "You need at least one class before you can create an assignment for it — create a class first.",
+      "Add a class",
+      "addClass",
+    );
+  }
+  const classOptions = availableClasses
     .map((item) => `<option value="${item.id}">${item.name}</option>`)
     .join("");
   return `
@@ -1195,6 +1234,21 @@ function renderAssignmentGroupOptions(classId) {
 
 function escapeHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// Several "Add ..." forms depend on another kind of record existing first
+// (a class needs an instructor to assign; a student/material/assignment
+// needs a class to belong to). On a brand-new school with nothing created
+// yet, showing a required dropdown with zero options is a dead end — this
+// renders a clear next step instead of a form that can never be submitted.
+function emptyDependencyNotice(title, message, buttonLabel, nextModal) {
+  return `
+    <h2>${title}</h2>
+    <p class="hint">${message}</p>
+    <div class="modal-actions">
+      <button type="button" onclick="openModal('${nextModal}')">${buttonLabel}</button>
+    </div>
+  `;
 }
 
 async function handleAddClass(event) {
@@ -1975,25 +2029,63 @@ function canManageAccounts() {
   return ["Super Admin", "School Admin", "Instructor"].includes(state.role);
 }
 
+// A dedicated Instructors directory for Managers — separate from the
+// generic Accounts & Logins list — so adding a new instructor profile and
+// issuing their first login both happen from one obvious place, before a
+// Manager ever needs to think about classes or students.
+function instructorRow(instructor) {
+  const directory = state.accountsDirectory;
+  const account = directory?.find((row) => row.instructor_name === instructor.name);
+  const ownClasses = classes.filter((item) => item.instructor === instructor.name);
+  const key = `instructor-${instructor.name}`;
+  const busy = state.accountsBusy === key;
+  const status = account
+    ? account.must_change_password
+      ? badge("Invited")
+      : badge("Active")
+    : `<span class="muted-pill">Not set up</span>`;
+  const actionLabel = account ? "Reset password" : "Generate login";
+  const handlerName = account ? "resetCredentials" : "generateCredentials";
+  const handler = `${handlerName}('${key}', 'Instructor', '${escapeJs(instructor.email)}', '${escapeJs(instructor.name)}', '${escapeJs(instructor.name)}')`;
+
+  return `
+    <tr>
+      <td><strong>${instructor.name}</strong></td>
+      <td>${instructor.email}</td>
+      <td>${ownClasses.length ? ownClasses.map((c) => c.name).join(", ") : "No classes yet"}</td>
+      <td>${status}</td>
+      <td><button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? "Working…" : actionLabel}</button></td>
+    </tr>
+  `;
+}
+
+function instructorsView() {
+  const rows = people.instructors.map(instructorRow);
+
+  return `
+    ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
+    <div class="toolbar">
+      ${canCreateInstructorProfiles(state.role) ? `<button onclick="openModal('addInstructor')">Add instructor</button>` : ""}
+    </div>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Instructors</h2><span>${people.instructors.length} on staff</span></div>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Classes</th><th>Portal access</th><th>Action</th></tr></thead>
+        <tbody>${rows.join("") || `<tr><td colspan="5" class="empty">No instructors yet — add one to get started.</td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+}
+
 function accountsView() {
   const isInstructor = state.role === "Instructor";
   const directory = state.accountsDirectory;
-  const accountFor = (kind, refId) =>
-    directory?.find((row) => (kind === "Student" ? row.student_id === refId : row.instructor_name === refId));
+  const accountFor = (refId) => directory?.find((row) => row.student_id === refId);
 
-  const instructorRows = isInstructor
-    ? []
-    : people.instructors.map((instructor) =>
-        accountRow({
-          key: `instructor-${instructor.name}`,
-          role: "Instructor",
-          name: instructor.name,
-          email: instructor.email,
-          refId: instructor.name,
-          account: accountFor("Instructor", instructor.name),
-        }),
-      );
-
+  // Instructor logins now live on their own "Instructors" tab (above
+  // Students in the sidebar) so a Manager doesn't have to hunt for them
+  // here — this panel is Student logins plus, for a Manager, adding
+  // another Manager.
   const visibleStudents = isInstructor ? filterStudentsForViewer(currentViewer(), people.students) : people.students;
   const studentRows = visibleStudents.map((student) =>
     accountRow({
@@ -2002,24 +2094,23 @@ function accountsView() {
       name: fullName(student),
       email: student.email,
       refId: student.id,
-      account: accountFor("Student", student.id),
+      account: accountFor(student.id),
     }),
   );
 
   const isManager = ["Super Admin", "School Admin"].includes(state.role);
   return `
     ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
-    ${isInstructor ? `<p class="hint">You can issue or reset a login for students in your own classes only. Ask a Manager for instructor accounts.</p>` : ""}
+    ${isInstructor ? `<p class="hint">You can issue or reset a login for students in your own classes only. Ask a Manager for instructor or manager accounts.</p>` : `<p class="hint">Looking for instructor logins? See the <button onclick="navigate('instructors')">Instructors</button> tab.</p>`}
     <div class="toolbar">
       ${isManager ? `<button onclick="openModal('addManager')">Add manager</button>` : ""}
-      ${canCreateInstructorProfiles(state.role) ? `<button onclick="openModal('addInstructor')">Add instructor</button>` : ""}
       ${canCreateStudentProfiles(state.role) ? `<button onclick="openModal('addStudent')">Add student</button>` : ""}
     </div>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>${isInstructor ? "Student Logins" : "Instructor &amp; Student Logins"}</h2><span>${directory ? directory.length : 0} accounts issued</span></div>
+      <div class="panel-head"><h2>Student Logins</h2><span>${directory ? directory.length : 0} accounts issued</span></div>
       <table>
         <thead><tr><th>Name</th><th>Role</th><th>Username (email)</th><th>Portal access</th><th>Action</th></tr></thead>
-        <tbody>${[...instructorRows, ...studentRows].join("") || `<tr><td colspan="5" class="empty">No accounts to manage yet.</td></tr>`}</tbody>
+        <tbody>${studentRows.join("") || `<tr><td colspan="5" class="empty">No accounts to manage yet.</td></tr>`}</tbody>
       </table>
     </section>
   `;
