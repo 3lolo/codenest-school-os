@@ -198,6 +198,14 @@ For real school data with real logins, also run, in order:
 8. `supabase/migrations/0007_staff_requests_attendance.sql` — adds the
    Attendance and Staff Requests tables/policies described above. Also
    safe to run any time after `0002`.
+9. `supabase/migrations/0008_fix_group_recursion.sql` — **run this if you
+   already ran `0006` before this fix landed.** The original `0006`
+   shipped with a real bug: reading Groups or group-scoped Materials
+   could fail with `infinite recursion detected in policy for relation
+   "groups"` (an HTTP 500 in the browser). This patch fixes it in place
+   — safe to run once, and harmless to run again. If you're setting up a
+   brand-new project today, the current `0006` already has this fix
+   baked in, so running `0008` afterward is a no-op but still safe.
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`
 so someone can sign in and start issuing Instructor/Student credentials.
@@ -223,6 +231,12 @@ unauthorized request:
   the API directly (curl, Postman, the URL bar) rather than through the
   app's own UI, it just means that particular request needs an `apikey`
   header added.
+- A plain HTTP 500 on `groups`, `group_members`, or `materials` (visible
+  in the browser console as `Failed to load resource: the server
+  responded with a status of 500`) — this was a real bug in the original
+  `0006_instructor_operations.sql`, not something wrong with your setup.
+  Run `supabase/migrations/0008_fix_group_recursion.sql` to fix it; see
+  `docs/security-test-report.md` for the root cause.
 
 ## Vercel
 

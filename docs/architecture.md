@@ -102,15 +102,28 @@ Added in `supabase/migrations/0006_instructor_operations.sql`:
   split a class into smaller groups and assign students to them. Reads
   and writes are scoped to the class's own instructor (or a Manager); a
   Student/Parent can read a group only if one of their own linked
-  students is a member of it.
+  students is a member of it. The read/write policies on both tables,
+  and on `materials` below, are backed by two `security definer` helper
+  functions, `public.instructor_owns_class()` and `public.can_view_group()`
+  — they exist specifically so `groups`'s policy and `group_members`'s
+  policy never query each other's table directly. An earlier version did
+  exactly that (a plain `EXISTS` subquery in each direction), which
+  Postgres detects as a policy-evaluation cycle and rejects with
+  `infinite recursion detected in policy for relation "groups"` — a real
+  bug that shipped in the original `0006`, fixed in the current version
+  of that file and, for projects that already ran the old one, by
+  `0008_fix_group_recursion.sql`. See `docs/security-test-report.md` for
+  how this was reproduced and verified against a real Postgres instance.
 - **Materials** (`materials` table + a private `materials` Storage
   bucket): an Instructor (or Manager) uploads a file, tags it with a
   class and optionally one group, and it becomes downloadable to whoever
-  the `materials` table's RLS policy says can see that class/group. The
-  Storage bucket itself is only scoped one class at a time (objects live
-  under `<class_id>/<file>`), not per-group — see the note at the bottom
-  of the migration for what that trade-off means and how to tighten it
-  later if it matters in practice.
+  the `materials` table's RLS policy says can see that class/group (its
+  group-scoped branch goes through `can_view_group()` for the same
+  recursion-avoidance reason as above). The Storage bucket itself is only
+  scoped one class at a time (objects live under `<class_id>/<file>`),
+  not per-group — see the note at the bottom of the migration for what
+  that trade-off means and how to tighten it later if it matters in
+  practice.
 - **Assignments** gained an optional `group_id` so a single assignment
   can target one group instead of the whole class; the existing
   Instructor-write policy on `assignments` did not need to change, only

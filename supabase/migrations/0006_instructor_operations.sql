@@ -110,66 +110,91 @@ alter table public.group_members enable row level security;
 create index if not exists idx_groups_class_id on public.groups(class_id);
 create index if not exists idx_group_members_student_id on public.group_members(student_id);
 
-drop policy if exists "groups scoped read" on public.groups;
-create policy "groups scoped read" on public.groups
-for select using (
-  public.is_admin()
-  or exists (
+-- Helper functions used below so the `groups`/`group_members`/`materials`
+-- policies never query each other's tables directly.
+--
+-- Why this exists: a naive version of these policies has `groups`
+-- read-scoped by an EXISTS subquery against `group_members`, and
+-- `group_members` read-scoped by an EXISTS subquery against `groups`.
+-- Postgres evaluates RLS for each table involved in a query, including
+-- tables only touched inside another table's policy, so that pair forms
+-- a cycle: reading `groups` triggers `group_members`'s policy, which
+-- triggers `groups`'s policy again, and Postgres aborts with "infinite
+-- recursion detected in policy for relation ...". This surfaces through
+-- PostgREST as a plain HTTP 500 with no useful detail, which is what
+-- shows up in the browser console.
+--
+-- The fix is the same pattern already used by `is_admin()` and
+-- `can_view_student()` in 0002_production_rls.sql: put the cross-table
+-- check inside a `security definer` function. A `security definer`
+-- function runs as the (superuser-privileged) role that created it, so
+-- its internal queries bypass RLS entirely instead of re-triggering
+-- another table's policy — breaking the cycle. These must be declared
+-- here (after `groups`/`group_members` exist) rather than up near the
+-- other helpers in 0002, since a `language sql` function's body is
+-- resolved against the catalog at CREATE time, not at call time.
+create or replace function public.instructor_owns_class(target_class_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
     select 1 from public.user_profiles profile
     join public.classes class on class.instructor = profile.instructor_name
     where profile.user_id = auth.uid()
       and profile.role = 'Instructor'
-      and class.class_id = groups.class_id
+      and class.class_id = target_class_id
   )
-  or exists (
-    select 1 from public.group_members gm
-    join public.students student on student.student_id = gm.student_id
-    where gm.group_id = groups.group_id
-      and public.can_view_student(student.student_id, student.class_id)
-  )
+$$;
+
+create or replace function public.can_view_group(target_group_id text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select
+    public.is_admin()
+    or exists (
+      select 1 from public.groups grp
+      where grp.group_id = target_group_id
+        and public.instructor_owns_class(grp.class_id)
+    )
+    or exists (
+      select 1 from public.group_members gm
+      join public.students student on student.student_id = gm.student_id
+      where gm.group_id = target_group_id
+        and public.can_view_student(student.student_id, student.class_id)
+    )
+$$;
+
+grant execute on function public.instructor_owns_class(text) to anon, authenticated, service_role;
+grant execute on function public.can_view_group(text) to anon, authenticated, service_role;
+
+drop policy if exists "groups scoped read" on public.groups;
+create policy "groups scoped read" on public.groups
+for select using (
+  public.can_view_group(groups.group_id)
 );
 
 drop policy if exists "groups write admin instructor" on public.groups;
 create policy "groups write admin instructor" on public.groups
 for all using (
   public.is_admin()
-  or exists (
-    select 1 from public.user_profiles profile
-    join public.classes class on class.instructor = profile.instructor_name
-    where profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-      and class.class_id = groups.class_id
-  )
+  or public.instructor_owns_class(groups.class_id)
 )
 with check (
   public.is_admin()
-  or exists (
-    select 1 from public.user_profiles profile
-    join public.classes class on class.instructor = profile.instructor_name
-    where profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-      and class.class_id = groups.class_id
-  )
+  or public.instructor_owns_class(groups.class_id)
 );
 
 drop policy if exists "group members scoped read" on public.group_members;
 create policy "group members scoped read" on public.group_members
 for select using (
-  public.is_admin()
-  or exists (
-    select 1 from public.groups grp
-    join public.user_profiles profile on profile.instructor_name = (
-      select class.instructor from public.classes class where class.class_id = grp.class_id
-    )
-    where grp.group_id = group_members.group_id
-      and profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-  )
-  or exists (
-    select 1 from public.students student
-    where student.student_id = group_members.student_id
-      and public.can_view_student(student.student_id, student.class_id)
-  )
+  public.can_view_group(group_members.group_id)
 );
 
 drop policy if exists "group members write admin instructor" on public.group_members;
@@ -178,22 +203,16 @@ for all using (
   public.is_admin()
   or exists (
     select 1 from public.groups grp
-    join public.classes class on class.class_id = grp.class_id
-    join public.user_profiles profile on profile.instructor_name = class.instructor
     where grp.group_id = group_members.group_id
-      and profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
+      and public.instructor_owns_class(grp.class_id)
   )
 )
 with check (
   public.is_admin()
   or exists (
     select 1 from public.groups grp
-    join public.classes class on class.class_id = grp.class_id
-    join public.user_profiles profile on profile.instructor_name = class.instructor
     where grp.group_id = group_members.group_id
-      and profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
+      and public.instructor_owns_class(grp.class_id)
   )
 );
 
@@ -221,13 +240,7 @@ drop policy if exists "materials scoped read" on public.materials;
 create policy "materials scoped read" on public.materials
 for select using (
   public.is_admin()
-  or exists (
-    select 1 from public.user_profiles profile
-    join public.classes class on class.instructor = profile.instructor_name
-    where profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-      and class.class_id = materials.class_id
-  )
+  or public.instructor_owns_class(materials.class_id)
   or (
     materials.group_id is null
     and exists (
@@ -238,12 +251,7 @@ for select using (
   )
   or (
     materials.group_id is not null
-    and exists (
-      select 1 from public.group_members gm
-      join public.students student on student.student_id = gm.student_id
-      where gm.group_id = materials.group_id
-        and public.can_view_student(student.student_id, student.class_id)
-    )
+    and public.can_view_group(materials.group_id)
   )
 );
 
@@ -251,23 +259,11 @@ drop policy if exists "materials write admin instructor" on public.materials;
 create policy "materials write admin instructor" on public.materials
 for all using (
   public.is_admin()
-  or exists (
-    select 1 from public.user_profiles profile
-    join public.classes class on class.instructor = profile.instructor_name
-    where profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-      and class.class_id = materials.class_id
-  )
+  or public.instructor_owns_class(materials.class_id)
 )
 with check (
   public.is_admin()
-  or exists (
-    select 1 from public.user_profiles profile
-    join public.classes class on class.instructor = profile.instructor_name
-    where profile.user_id = auth.uid()
-      and profile.role = 'Instructor'
-      and class.class_id = materials.class_id
-  )
+  or public.instructor_owns_class(materials.class_id)
 );
 
 -- Private storage bucket for uploaded files. Objects are stored under

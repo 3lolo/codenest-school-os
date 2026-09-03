@@ -4,10 +4,97 @@ Date: 2026-09-03
 
 ## Result
 
-Passed: 21 / 21 automated tests (one assertion updated to match the new
-`issuableRolesFor()` behavior below; test count unchanged).
+Passed: 21 / 21 automated tests.
 
-## Latest Update: Attendance, Staff Requests, Students Tab, and Diagnosing an RLS Error
+## Latest Update: Fixed a Real RLS Recursion Bug (500s on Groups/Materials) and a Confusing 409 on Instructors
+
+A Manager reported four errors from the live site: HTTP 500 on
+`groups`, `group_members`, and `materials`, and HTTP 409 on `instructors`.
+Both are now fixed and, unlike a plain code-review guess, both were
+reproduced against a real Postgres database before being fixed, and
+re-verified against the same database afterward.
+
+**The 500s — root cause.** `0006_instructor_operations.sql` originally
+scoped reads on `groups` with an `EXISTS` subquery against
+`group_members`, and scoped reads on `group_members` with an `EXISTS`
+subquery right back against `groups`. Postgres evaluates row-level
+security for every table touched while answering a query — including a
+table only touched inside another table's own policy — so reading
+`groups` re-triggered `group_members`'s policy, which re-triggered
+`groups`'s policy again. Postgres detects that cycle and refuses to
+evaluate it, raising `infinite recursion detected in policy for relation
+"groups"` (or `"group_members"`). PostgREST has no special handling for
+that error, so it passes it straight through as an HTTP 500 with no
+useful detail — exactly the blank 500s reported. `materials`'s read
+policy queried `group_members` the same way, so any material scoped to a
+group hit the identical error.
+
+This was not a configuration problem, a missing migration, or a data
+issue — it was a genuine bug in how migration `0006` wrote those three
+policies, present since that migration was first written, that only
+shows up once real Instructor/Student accounts start reading Groups or
+group-scoped Materials.
+
+**How it was verified, not guessed.** This sandbox cannot reach the
+project's real Supabase instance (see "Not Yet Verified Live" below), so
+instead of reasoning about the SQL by hand, a real local PostgreSQL 16
+instance was used to build a faithful stand-in for Supabase's runtime:
+stub `auth`/`storage` schemas matching Supabase's own (`auth.users`,
+`auth.uid()`, `storage.buckets`/`objects`), the real `anon`/
+`authenticated`/`service_role` roles Supabase uses, every migration file
+from this repo loaded verbatim in order (`0001` through `0007`), and
+realistic seed data (one instructor, one class, one student, one group,
+one group member, one material). Running the exact failing queries as
+that signed-in Instructor (`SET ROLE authenticated; SET
+request.jwt.claim.sub = '<uuid>'`) reproduced the user's precise error
+message. The fix below was then applied to that same database and the
+same queries were re-run — no more recursion error, and the Instructor
+saw exactly their own class's group, its one member, and its material
+(a second, unrelated Instructor with no ties to that class correctly saw
+zero rows, not an error). The same sequence was repeated from a
+completely fresh database running the *current* migration files start to
+finish, and separately, against a database that had only the *old,
+buggy* `0006` applied followed by the new `0008` patch — both paths
+verified clean.
+
+**The fix.** Same pattern this codebase already uses for `is_admin()`
+and `can_view_student()` (`0002_production_rls.sql`): move the
+cross-table check into a `security definer` SQL function.
+`security definer` functions run as their (superuser-privileged) owner,
+so their internal queries bypass RLS entirely instead of re-triggering
+another table's policy, breaking the cycle. Two new functions,
+`instructor_owns_class()` and `can_view_group()`, now back the read *and*
+write policies on `groups`, `group_members`, and `materials`.
+
+- `supabase/migrations/0006_instructor_operations.sql` was edited in
+  place so a **brand-new** Supabase project that hasn't run it yet gets
+  the correct version directly — nothing to patch afterward.
+- `supabase/migrations/0008_fix_group_recursion.sql` is a new, additive
+  migration for a project (like the one that reported this) that already
+  ran the old, buggy `0006`. It only creates/replaces the two functions
+  and re-creates the affected policies — it's safe to run once, and safe
+  to run again if needed. **Run this migration in Supabase's SQL Editor
+  to apply the fix to your live project.**
+
+**The 409 on `instructors` — separate issue, also fixed.** This one
+was a real unique-constraint violation, not a bug: `instructors.email`
+has been `unique` since `0001_dashboard_foundation.sql`, so re-submitting
+"Add instructor" with an email already in use is correctly rejected by
+Postgres with HTTP 409. The bug was on the frontend: `supabaseInsert()`
+in `src/app.js` showed the raw Postgres error text
+(`duplicate key value violates unique constraint "instructors_email_key"`)
+verbatim in the modal, which is accurate but not something a Manager
+should have to parse. `supabaseInsert()` and `supabaseUpsert()` now
+detect a 409 and, when the error identifies which field collided (email,
+a `group_id`, a `class_id`, etc.), show a plain message like `That email
+("ali@example.com") is already in use — please use a different one.`
+instead — the same underlying rule, a clearer message.
+
+Re-verified: `node --check src/app.js`, `npm test` (21/21), `npm run
+build`, and the static onclick/onsubmit/onchange-to-`window.*` export
+audit (no new handlers were added by this fix).
+
+## Previous Update: Attendance, Staff Requests, Students Tab, and Diagnosing an RLS Error
 
 A Manager reported two errors while testing as an Instructor test
 account: `No API key found in request` and `new row violates row-level
@@ -50,7 +137,7 @@ are false positives from the regex matching `escapeJs(...)` and
 `document.getElementById(...)` inside handler-string source text, not
 real dead handlers).
 
-## Previous Update: Instructors Tab + Fixed a Real Bootstrap Dead End
+## Earlier Update: Instructors Tab + Fixed a Real Bootstrap Dead End
 
 A Manager reported "I cannot add student." Tracing it through: the "Add
 student" form required picking an existing class from a dropdown, and the
@@ -281,3 +368,18 @@ production — and see the note at the bottom of
 `0006_instructor_operations.sql` about the Materials Storage bucket being
 scoped per-class rather than per-group, which is a deliberate scope
 trade-off, not an oversight.
+
+**Update:** the specific read policies on `groups`, `group_members`, and
+`materials` referenced above *have* since been verified for real — not
+against live Supabase (still unreachable from this sandbox), but against
+a real local PostgreSQL 16 instance built to faithfully stand in for it
+(the actual migration files, the real `anon`/`authenticated`/
+`service_role` roles, stub `auth`/`storage` schemas). See "Latest Update"
+above for what that caught (a genuine RLS recursion bug) and how it was
+fixed. Everything else in this section — Classes, Assignments,
+Attendance, Staff Requests, and the Materials Storage bucket itself —
+is still only verified the way described above (syntax checks, the
+automated suite, a build, and a static handler audit), not against a
+real database, so the same click-through on a live project remains the
+right way to confirm those specifically before relying on them in
+production.

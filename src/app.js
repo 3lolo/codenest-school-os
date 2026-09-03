@@ -796,9 +796,34 @@ async function supabaseInsert(table, rows) {
   });
   const body = await response.json().catch(() => []);
   if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+    }
     throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
   }
   return body;
+}
+
+// PostgREST reports a unique-constraint violation (Postgres error code
+// 23505 — e.g. adding a second instructor with an email that's already in
+// use) as a plain HTTP 409, with a machine-oriented `message` like
+// `duplicate key value violates unique constraint "instructors_email_key"`
+// and a `details` field like `Key (email)=(x@example.com) already exists.`
+// That's accurate but not something a Manager/Instructor filling in a form
+// should have to parse. Turn it into a plain-language message naming the
+// field and value, when we can find one; otherwise fall back to a generic
+// "already exists" message rather than the raw Postgres error text.
+function friendlyDuplicateMessage(body) {
+  const detail = body?.details || body?.detail || "";
+  const match = /Key \(([^)]+)\)=\(([^)]+)\)/.exec(detail);
+  if (match) {
+    const field = match[1].replace(/_/g, " ");
+    return `That ${field} ("${match[2]}") is already in use — please use a different one.`;
+  }
+  if (body?.code === "23505") {
+    return "That entry already exists — please check for a duplicate.";
+  }
+  return "";
 }
 
 // Insert-or-update in one call, keyed on `onConflict` columns — used for
@@ -820,6 +845,9 @@ async function supabaseUpsert(table, rows, onConflict) {
   });
   const body = await response.json().catch(() => []);
   if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+    }
     throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
   }
   return body;
