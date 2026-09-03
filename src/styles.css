@@ -1581,3 +1581,31 @@ code {
   font-weight: 600;
   color: var(--brand-dark);
 }
+
+/* ---------- Students tab: clickable rows + attendance-taking modal ---------- */
+
+.table-panel tbody tr[onclick] {
+  cursor: pointer;
+}
+
+.table-panel tbody tr.selected-row {
+  background: var(--soft);
+}
+
+.attendance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.attendance-row span {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.attendance-row select {
+  width: auto;
+  min-width: 120px;
+}

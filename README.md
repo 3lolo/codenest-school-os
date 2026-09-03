@@ -121,6 +121,48 @@ All of this is enforced with real row-level security, not just hidden
 buttons — see "Groups, Materials, and Group-Scoped Assignments" in
 `docs/architecture.md` for exactly which policies back each action.
 
+**Seeing `new row violates row-level security policy for table "..."`?**
+That means the row-level security migration those buttons depend on
+hasn't been run yet in Supabase's SQL Editor — it's not a bug in the
+button, and it's not something retrying fixes. Run the migrations listed
+under **Supabase** below, in order, especially `0006` (Instructors
+creating classes/students) and `0007` (Attendance, Staff Requests) — both
+are safe to run any time after `0002`.
+
+## Students Tab
+
+The Students list (sidebar -> **Students**) now has a **New student**
+button (same "Add a student" form as Classes/Accounts & Logins), a class
+filter dropdown, and an **Export CSV** button that downloads the
+currently-filtered list. Click any row to load that student into the
+profile panel on the right — it now also shows their class and any
+Groups they belong to.
+
+## Attendance (needs migration `0007`)
+
+**Attendance** in the sidebar -> **Take attendance**: pick a class and a
+date (defaults to today), mark each student Present/Absent/Late/Excused,
+and **Save attendance**. Re-opening the same class and date shows what
+was already marked (it overwrites that day's rows instead of duplicating
+them) so correcting a mistake is just re-saving. The **Recent Attendance
+Log** below the Watchlist summarizes the last 30 sessions taken, one row
+per class/date. The older **Attendance Watchlist** table (absence/late
+counters per student) is unchanged and still useful for spotting
+at-risk students at a glance.
+
+Instructors only see classes and log entries for their own classes;
+Managers see everything.
+
+## Staff Requests — Instructors Messaging Managers (needs migration `0007`)
+
+**Requests** in the sidebar: an Instructor's **New request** button
+sends either a quick **Message** or a **Time off request** (with start/
+end dates) straight to every Manager. Managers see every request here
+with **Approve** / **Deny** / **Mark read** actions; an Instructor sees
+only their own requests and the status a Manager gave them — they can
+send a new one but can't edit or delete a sent request, so it stays a
+reliable record of what was actually asked and decided.
+
 ## Local Checks
 
 ```bash
@@ -153,9 +195,34 @@ For real school data with real logins, also run, in order:
    "Classes, Groups, Materials, and Assignments" above). Safe to run any
    time after `0002`; everything already using this app keeps working
    without it, it just won't have these newer features yet.
+8. `supabase/migrations/0007_staff_requests_attendance.sql` — adds the
+   Attendance and Staff Requests tables/policies described above. Also
+   safe to run any time after `0002`.
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`
 so someone can sign in and start issuing Instructor/Student credentials.
+
+**Every migration from `0002` onward must actually be run** for its
+feature to work — the app can't detect a skipped migration and warn you;
+it just surfaces whatever Postgres/PostgREST says. Two errors you'll see
+if one is missing or if RLS is doing its job correctly against an
+unauthorized request:
+
+- `new row violates row-level security policy for table "..."` — either
+  a migration that adds a needed policy hasn't run yet, or (working as
+  intended) the signed-in user genuinely isn't allowed to write that row
+  (e.g. an Instructor trying to insert a class assigned to a *different*
+  instructor).
+- `No API key found in request` / `No apikey request header or url param
+  was found` — this is Supabase rejecting a request that has no `apikey`
+  header at all. Every direct Supabase call in `src/app.js` always sends
+  one (`config.supabaseAnonKey`), so seeing this from inside the app
+  itself would mean `SUPABASE_ANON_KEY` isn't actually reaching the
+  deployed site — double-check it's set in Vercel's environment variables
+  and that you redeployed after adding it. If you saw this while testing
+  the API directly (curl, Postman, the URL bar) rather than through the
+  app's own UI, it just means that particular request needs an `apikey`
+  header added.
 
 ## Vercel
 

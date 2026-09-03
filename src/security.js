@@ -13,9 +13,9 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
-  "School Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "reports", "notifications", "accounts", "leads", "reviews"],
-  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "communications", "notifications", "accounts"],
+  "Super Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
+  "School Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "reports", "notifications", "accounts", "leads", "reviews"],
+  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "notifications", "accounts"],
   Student: ["dashboard", "assignments", "materials", "attendance", "communications", "notifications"],
   Parent: ["dashboard", "students", "assignments", "materials", "attendance", "communications", "notifications"],
 };

@@ -7,7 +7,50 @@ Date: 2026-09-03
 Passed: 21 / 21 automated tests (one assertion updated to match the new
 `issuableRolesFor()` behavior below; test count unchanged).
 
-## This Update: Instructors Tab + Fixed a Real Bootstrap Dead End
+## Latest Update: Attendance, Staff Requests, Students Tab, and Diagnosing an RLS Error
+
+A Manager reported two errors while testing as an Instructor test
+account: `No API key found in request` and `new row violates row-level
+security policy for table "classes"` while trying "Add a class."
+
+Investigated both:
+
+- Audited every direct-to-Supabase `fetch()` call in `src/app.js` (there
+  are 10) and confirmed every single one sends the `apikey` header —
+  none were missing it. That error therefore did not come from this
+  app's own rendered UI (the account-issuance API's raw upstream error
+  text is never shown to the browser either — only a friendly
+  `body.error` string is). It's most likely either a Vercel
+  `SUPABASE_ANON_KEY` configuration issue (worth double-checking) or a
+  request made outside the app (curl/Postman/the URL bar) while testing.
+  Documented the distinction and what to check in the README so it's
+  diagnosable without needing me to reproduce it.
+- The RLS violation on "classes" is real and traced to its actual cause:
+  the form was showing a fixed instructor name with no dropdown (the
+  Instructor-role branch of "Add a class"), meaning the account testing
+  it was signed in as an Instructor — and an Instructor's insert into
+  `classes` only became legal once migration `0006` added the
+  `"classes write instructor own"` policy. If `0006` hasn't been run yet
+  on the live project, this exact error is expected, not a code bug.
+  Flagged this prominently in the README's Supabase section.
+
+Also this update: a real Students-tab "New student" button (opens the
+same Add Student form used elsewhere), a class filter, a client-side CSV
+export, clickable rows that load a student's profile (now including
+their class and Groups), a working "Take attendance" flow
+(`attendance_records`, migration `0007`), and a Staff Requests feature
+letting an Instructor message Managers or request time off
+(`staff_requests`, same migration) with Manager-only approve/deny/mark-
+read actions.
+
+Re-verified: `node --check` on every touched file, `npm test` (21/21),
+`npm run build`, and the static onclick/onsubmit/onchange-to-
+`window.*` export audit (38 calls, 37 exports — the two "missing" hits
+are false positives from the regex matching `escapeJs(...)` and
+`document.getElementById(...)` inside handler-string source text, not
+real dead handlers).
+
+## Previous Update: Instructors Tab + Fixed a Real Bootstrap Dead End
 
 A Manager reported "I cannot add student." Tracing it through: the "Add
 student" form required picking an existing class from a dropdown, and the
@@ -211,7 +254,7 @@ and the reviews migration (`0005`), and require Supabase Auth before
 adding private student or parent records, issuing real logins, or
 collecting real contact-form or review submissions.
 
-## Not Yet Verified Live (Classes/Groups/Materials/Assignments, migration `0006`)
+## Not Yet Verified Live (Classes/Groups/Materials/Assignments/Attendance/Staff Requests, migrations `0006`-`0007`)
 
 This environment cannot reach the project's Supabase or Vercel APIs at
 all (an organization-level network policy rejects the connection outright
@@ -231,9 +274,10 @@ manager/group/material/assignment through the new dashboard forms and
 confirming the RLS policies behave as written (an Instructor's insert
 being accepted for their own class and rejected for someone else's), and
 downloading an uploaded file back out of the `materials` Storage bucket.
-Please run migration `0006` and click through each new "Add ..." button
-once as a Manager and once as an Instructor test account before relying
-on this in production — and see the note at the bottom of
+Please run migrations `0006` and `0007` and click through each new
+"Add ..." button, "Take attendance", and "New request" once as a Manager
+and once as an Instructor test account before relying on this in
+production — and see the note at the bottom of
 `0006_instructor_operations.sql` about the Materials Storage bucket being
 scoped per-class rather than per-group, which is a deliberate scope
 trade-off, not an oversight.

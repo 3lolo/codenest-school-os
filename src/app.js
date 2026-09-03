@@ -44,6 +44,9 @@ const state = {
   modalBusy: false,
   modalError: "",
   modalNotice: "",
+  selectedStudentId: null,
+  studentClassFilter: "",
+  staffRequestBusy: null,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -62,6 +65,7 @@ const navItems = [
   ["assignments", "Assignments", "clipboard"],
   ["attendance", "Attendance", "check"],
   ["communications", "Messages", "message"],
+  ["staffRequests", "Requests", "message"],
   ["reports", "Reports", "chart"],
   ["notifications", "Notifications", "bell"],
   ["materials", "Materials", "folder"],
@@ -105,6 +109,8 @@ let notifications = [];
 let groups = [];
 let groupMembers = [];
 let materials = [];
+let attendanceRecords = [];
+let staffRequests = [];
 
 const icons = {
   grid: "▦",
@@ -236,6 +242,7 @@ function titleForView() {
     materials: "Class Materials",
     attendance: "Attendance",
     communications: "Communication Center",
+    staffRequests: ["Super Admin", "School Admin"].includes(state.role) ? "Staff Requests" : "Requests to Managers",
     reports: "Reports",
     notifications: "Notification Center",
     accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
@@ -258,6 +265,7 @@ function content() {
     materials: materialsView(),
     attendance: attendanceView(),
     communications: communicationsView(),
+    staffRequests: staffRequestsView(),
     reports: reportsView(),
     notifications: notificationsView(),
     accounts: accountsView(),
@@ -445,39 +453,91 @@ function studentCard(student) {
 }
 
 function students() {
-  const list = filterStudentsForViewer(currentViewer(), people.students);
+  const canAdd = canCreateStudentProfiles(state.role);
+  const viewerClasses = classesForViewer();
+  const isInstructor = state.role === "Instructor";
+  let list = filterStudentsForViewer(currentViewer(), people.students);
+  if (state.studentClassFilter) list = list.filter((s) => s.classId === state.studentClassFilter);
+
+  const selected = list.find((s) => s.id === state.selectedStudentId) || list[0];
+  const classFilterOptions = (isInstructor ? viewerClasses : classes)
+    .map((item) => `<option value="${item.id}" ${state.studentClassFilter === item.id ? "selected" : ""}>${item.name}</option>`)
+    .join("");
+
   return `
     <div class="toolbar">
-      <button>New student</button>
-      <button>Invite parent</button>
-      <button>Export</button>
+      ${canAdd ? `<button onclick="openModal('addStudent')">New student</button>` : ""}
+      <select onchange="setStudentClassFilter(this.value)" aria-label="Filter by class">
+        <option value="">All classes</option>
+        ${classFilterOptions}
+      </select>
+      <button onclick="exportStudentsCsv()">Export CSV</button>
     </div>
     <div class="split">
       <section class="panel table-panel">
         <table>
           <thead><tr><th>Student</th><th>Class</th><th>Attendance</th><th>Grade</th><th>Status</th></tr></thead>
           <tbody>
-            ${list.map((s) => `<tr><td><strong>${fullName(s)}</strong><span>${s.email}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.avgGrade}%</td><td>${badge(s.status)}</td></tr>`).join("")}
+            ${
+              list
+                .map(
+                  (s) =>
+                    `<tr class="${selected?.id === s.id ? "selected-row" : ""}" onclick="selectStudent('${escapeJs(s.id)}')"><td><strong>${fullName(s)}</strong><span>${s.email}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.avgGrade}%</td><td>${badge(s.status)}</td></tr>`,
+                )
+                .join("") || `<tr><td colspan="5" class="empty">No students to show yet.</td></tr>`
+            }
           </tbody>
         </table>
       </section>
-      ${list.length ? studentProfile(list[0]) : `<section class="panel"><p class="empty">No students to show yet.</p></section>`}
+      ${selected ? studentProfile(selected) : `<section class="panel"><p class="empty">No students to show yet.</p></section>`}
     </div>
   `;
 }
 
+function selectStudent(id) {
+  state.selectedStudentId = id;
+  renderContentOnly();
+}
+
+function setStudentClassFilter(classId) {
+  state.studentClassFilter = classId;
+  renderContentOnly();
+}
+
+function exportStudentsCsv() {
+  let list = filterStudentsForViewer(currentViewer(), people.students);
+  if (state.studentClassFilter) list = list.filter((s) => s.classId === state.studentClassFilter);
+  const header = ["Student ID", "First name", "Last name", "Email", "Class", "Status", "Attendance %", "Average grade %"];
+  const rows = list.map((s) => [s.id, s.first, s.last, s.email, className(s.classId), s.status, s.attendance, s.avgGrade]);
+  const csv = [header, ...rows]
+    .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "students.csv";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 function studentProfile(student) {
   if (!student) return `<section class="panel"><p class="empty">No student selected.</p></section>`;
+  const studentGroups = groups.filter((group) =>
+    groupMembers.some((member) => member.groupId === group.id && member.studentId === student.id),
+  );
   return `
     <section class="panel profile">
       <div class="profile-hero compact"><div class="avatar">${student.first[0]}${student.last[0]}</div><div><h2>${fullName(student)}</h2><span>${student.id} · ${student.status}</span></div></div>
       <dl>
         <div><dt>Email</dt><dd>${student.email}</dd></div>
-        <div><dt>Phone</dt><dd>${student.phone}</dd></div>
-        <div><dt>Family</dt><dd>${student.family}</dd></div>
-        <div><dt>Parent</dt><dd>${student.parent}</dd></div>
-        <div><dt>Level</dt><dd>${student.level}</dd></div>
-        <div><dt>Notes</dt><dd>${student.notes}</dd></div>
+        <div><dt>Phone</dt><dd>${student.phone || "—"}</dd></div>
+        <div><dt>Class</dt><dd>${className(student.classId)}</dd></div>
+        <div><dt>Group(s)</dt><dd>${studentGroups.length ? studentGroups.map((g) => g.name).join(", ") : "—"}</dd></div>
+        <div><dt>Family</dt><dd>${student.family || "—"}</dd></div>
+        <div><dt>Parent</dt><dd>${student.parent || "—"}</dd></div>
+        <div><dt>Level</dt><dd>${student.level || "—"}</dd></div>
+        <div><dt>Notes</dt><dd>${student.notes || "—"}</dd></div>
       </dl>
     </section>
   `;
@@ -549,18 +609,59 @@ function assignmentPanel() {
 }
 
 function attendanceView() {
+  const canTake = canCreateStudentProfiles(state.role) || state.role === "Instructor";
+  const isInstructor = state.role === "Instructor";
+  const viewerClassIds = new Set(classesForViewer().map((item) => item.id));
+  const recentLog = attendanceRecords
+    .filter((record) => !isInstructor || viewerClassIds.has(record.classId))
+    .slice()
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 30);
+
   return `
-    <div class="toolbar"><button>Take attendance</button><button>Notify absences</button><button>Configure threshold</button></div>
+    <div class="toolbar">${canTake ? `<button onclick="openModal('takeAttendance')">Take attendance</button>` : ""}</div>
     <section class="panel table-panel">
       <div class="panel-head"><h2>Attendance Watchlist</h2><span>Threshold: ${school.settings.absenceThreshold} absences</span></div>
       <table>
-        <thead><tr><th>Student</th><th>Class</th><th>Attendance</th><th>Absences</th><th>Late</th><th>Action</th></tr></thead>
+        <thead><tr><th>Student</th><th>Class</th><th>Attendance</th><th>Absences</th><th>Late</th><th>Status</th></tr></thead>
         <tbody>
-          ${people.students.map((s) => `<tr><td><strong>${fullName(s)}</strong><span>${s.parent}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.absences}</td><td>${s.late}</td><td>${s.absences >= school.settings.absenceThreshold ? badge("Notify") : badge("Monitor")}</td></tr>`).join("")}
+          ${people.students.map((s) => `<tr><td><strong>${fullName(s)}</strong><span>${s.parent}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.absences}</td><td>${s.late}</td><td>${s.absences >= school.settings.absenceThreshold ? badge("Notify") : badge("Monitor")}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">No students yet.</td></tr>`}
+        </tbody>
+      </table>
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Recent Attendance Log</h2><span>${recentLog.length} sessions marked</span></div>
+      <table>
+        <thead><tr><th>Date</th><th>Class</th><th>Present</th><th>Absent</th><th>Late</th><th>Excused</th></tr></thead>
+        <tbody>
+          ${
+            groupAttendanceBySession(recentLog)
+              .map(
+                (session) =>
+                  `<tr><td>${session.date}</td><td>${className(session.classId)}</td><td>${session.present}</td><td>${session.absent}</td><td>${session.late}</td><td>${session.excused}</td></tr>`,
+              )
+              .join("") || `<tr><td colspan="6" class="empty">No attendance taken yet — use "Take attendance" above.</td></tr>`
+          }
         </tbody>
       </table>
     </section>
   `;
+}
+
+// Collapses individual per-student attendance_records rows into one
+// summary row per class/date, since that's what's useful to scan at a
+// glance; the modal below still writes one row per student underneath.
+function groupAttendanceBySession(records) {
+  const sessions = new Map();
+  for (const record of records) {
+    const key = `${record.classId}__${record.date}`;
+    if (!sessions.has(key)) {
+      sessions.set(key, { classId: record.classId, date: record.date, present: 0, absent: 0, late: 0, excused: 0 });
+    }
+    const session = sessions.get(key);
+    if (session[record.status] !== undefined) session[record.status] += 1;
+  }
+  return [...sessions.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function communicationsView() {
@@ -700,6 +801,30 @@ async function supabaseInsert(table, rows) {
   return body;
 }
 
+// Insert-or-update in one call, keyed on `onConflict` columns — used for
+// attendance, where re-submitting the same class/date should overwrite
+// that day's marks instead of creating duplicate rows (see the `unique`
+// constraint in 0007_staff_requests_attendance.sql).
+async function supabaseUpsert(table, rows, onConflict) {
+  if (!state.session) throw new Error("Sign in and try again.");
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/rest/v1/${table}?on_conflict=${encodeURIComponent(onConflict)}`, {
+    method: "POST",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+      "Content-Type": "application/json",
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(rows),
+  });
+  const body = await response.json().catch(() => []);
+  if (!response.ok) {
+    throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
+  }
+  return body;
+}
+
 async function supabaseUploadFile(path, file) {
   if (!state.session) throw new Error("Sign in and try again.");
   const base = config.supabaseUrl.replace(/\/$/, "");
@@ -761,6 +886,8 @@ async function loadFromSupabase(token) {
       groupRows,
       groupMemberRows,
       materialRows,
+      attendanceRows,
+      staffRequestRows,
     ] = await Promise.all([
       supabaseSelect("school_settings", "*", token),
       supabaseSelect("students", "*", token),
@@ -774,6 +901,8 @@ async function loadFromSupabase(token) {
       supabaseSelect("groups", "*", token).catch(() => []),
       supabaseSelect("group_members", "*", token).catch(() => []),
       supabaseSelect("materials", "*", token).catch(() => []),
+      supabaseSelect("attendance_records", "*", token).catch(() => []),
+      supabaseSelect("staff_requests", "*", token).catch(() => []),
     ]);
 
     const settings = settingsRows[0];
@@ -888,6 +1017,28 @@ async function loadFromSupabase(token) {
       fileName: material.file_name,
       createdAt: material.created_at,
     }));
+
+    attendanceRecords = attendanceRows.map((record) => ({
+      id: record.id,
+      studentId: record.student_id,
+      classId: record.class_id,
+      date: record.session_date,
+      status: record.status,
+    }));
+
+    staffRequests = staffRequestRows
+      .map((request) => ({
+        id: request.id,
+        instructorName: request.instructor_name,
+        kind: request.kind,
+        subject: request.subject,
+        message: request.message,
+        startDate: request.start_date,
+        endDate: request.end_date,
+        status: request.status,
+        createdAt: request.created_at,
+      }))
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
     dataSource.label = "Supabase connected";
     dataSource.status = "Live data loaded from Supabase";
@@ -1009,6 +1160,10 @@ function modalBody(modal) {
       return addMaterialModal();
     case "addAssignment":
       return addAssignmentModal();
+    case "takeAttendance":
+      return addAttendanceModal();
+    case "addStaffRequest":
+      return addStaffRequestModal();
     default:
       return "";
   }
@@ -1230,6 +1385,258 @@ function renderAssignmentGroupOptions(classId) {
     .map((group) => `<option value="${group.id}">${group.name}</option>`)
     .join("");
   select.innerHTML = `<option value="">Whole class</option>${options}`;
+}
+
+function addAttendanceModal() {
+  const availableClasses = classesForViewer();
+  if (availableClasses.length === 0) {
+    return emptyDependencyNotice(
+      "Take attendance",
+      "You need at least one class before you can take attendance for it — create a class first.",
+      "Add a class",
+      "addClass",
+    );
+  }
+  const defaultClassId = availableClasses[0].id;
+  const today = new Date().toISOString().slice(0, 10);
+  const classOptions = availableClasses.map((item) => `<option value="${item.id}">${item.name}</option>`).join("");
+  return `
+    <h2>Take attendance</h2>
+    ${modalMessages()}
+    <form onsubmit="handleTakeAttendance(event)">
+      <label>Class
+        <select name="classId" id="attendance-class-select" onchange="renderAttendanceRoster(this.value, document.getElementById('attendance-date-input').value)">
+          ${classOptions}
+        </select>
+      </label>
+      <label>Date
+        <input type="date" name="date" id="attendance-date-input" value="${today}" onchange="renderAttendanceRoster(document.getElementById('attendance-class-select').value, this.value)" />
+      </label>
+      <div id="attendance-roster">${attendanceRosterRows(defaultClassId, today)}</div>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Save attendance"}</button>
+      </div>
+    </form>
+  `;
+}
+
+// Re-rendered whenever the class or date changes: pre-fills each
+// student's status from any attendance already saved for that exact
+// class/date, so reopening the same day shows what was marked instead of
+// resetting everyone back to "Present".
+function attendanceRosterRows(classId, date) {
+  const roster = studentsInClass(classId);
+  if (!roster.length) return `<p class="hint">No students in this class yet.</p>`;
+  const existing = new Map(
+    attendanceRecords.filter((record) => record.classId === classId && record.date === date).map((record) => [record.studentId, record.status]),
+  );
+  return `
+    <fieldset class="modal-checklist">
+      <legend>Mark each student</legend>
+      ${roster
+        .map((student) => {
+          const current = existing.get(student.id) || "present";
+          return `
+            <div class="attendance-row">
+              <span>${fullName(student)}</span>
+              <select name="status-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}">
+                <option value="present" ${current === "present" ? "selected" : ""}>Present</option>
+                <option value="absent" ${current === "absent" ? "selected" : ""}>Absent</option>
+                <option value="late" ${current === "late" ? "selected" : ""}>Late</option>
+                <option value="excused" ${current === "excused" ? "selected" : ""}>Excused</option>
+              </select>
+            </div>
+          `;
+        })
+        .join("")}
+    </fieldset>
+  `;
+}
+
+function renderAttendanceRoster(classId, date) {
+  const container = document.getElementById("attendance-roster");
+  if (!container) return;
+  container.innerHTML = attendanceRosterRows(classId, date);
+}
+
+async function handleTakeAttendance(event) {
+  event.preventDefault();
+  const form = event.target;
+  const classId = form.classId.value;
+  const date = form.date.value;
+  const selects = [...form.querySelectorAll("select[data-student-id]")];
+  if (!classId || !date) {
+    state.modalError = "Please choose a class and a date.";
+    render();
+    return;
+  }
+  if (!selects.length) {
+    state.modalError = "There are no students in this class to mark yet.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const rows = selects.map((select) => ({
+      student_id: select.dataset.studentId,
+      class_id: classId,
+      session_date: date,
+      status: select.value,
+    }));
+    await supabaseUpsert("attendance_records", rows, "student_id,class_id,session_date");
+    await refreshAfterWrite();
+    closeModal();
+    navigate("attendance");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not save attendance. Has migration 0007 been run yet?";
+    render();
+  }
+}
+
+function addStaffRequestModal() {
+  return `
+    <h2>New request to Managers</h2>
+    <p class="hint">Send a quick message, or request time off — a Manager will see this in their Requests panel.</p>
+    ${modalMessages()}
+    <form onsubmit="handleAddStaffRequest(event)">
+      <label>Type
+        <select name="kind" onchange="toggleStaffRequestDates(this.value)">
+          <option value="message">Message</option>
+          <option value="holiday">Time off request</option>
+        </select>
+      </label>
+      <label>Subject<input type="text" name="subject" required /></label>
+      <label>Details<textarea name="message" rows="3"></textarea></label>
+      <div id="staff-request-dates" hidden>
+        <label>Start date<input type="date" name="startDate" /></label>
+        <label>End date<input type="date" name="endDate" /></label>
+      </div>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Sending…" : "Send"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function toggleStaffRequestDates(kind) {
+  const container = document.getElementById("staff-request-dates");
+  if (container) container.hidden = kind !== "holiday";
+}
+
+async function handleAddStaffRequest(event) {
+  event.preventDefault();
+  const form = event.target;
+  const kind = form.kind.value;
+  const subject = form.subject.value.trim();
+  const message = form.message.value.trim();
+  const startDate = form.startDate.value || null;
+  const endDate = form.endDate.value || null;
+  const instructorName = state.viewerContext?.instructorName;
+  if (!subject) {
+    state.modalError = "Please add a subject.";
+    render();
+    return;
+  }
+  if (!instructorName) {
+    state.modalError = "Your account isn't linked to an instructor record yet. Ask a Manager to fix this.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseInsert("staff_requests", [
+      {
+        instructor_name: instructorName,
+        kind,
+        subject,
+        message: message || null,
+        start_date: kind === "holiday" ? startDate : null,
+        end_date: kind === "holiday" ? endDate : null,
+      },
+    ]);
+    await refreshAfterWrite();
+    closeModal();
+    navigate("staffRequests");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not send this. Has migration 0007 been run yet?";
+    render();
+  }
+}
+
+function staffRequestsView() {
+  const isManager = ["Super Admin", "School Admin"].includes(state.role);
+  const rows = isManager ? staffRequests : staffRequests.filter((r) => r.instructorName === state.viewerContext?.instructorName);
+
+  return `
+    <div class="toolbar">${!isManager ? `<button onclick="openModal('addStaffRequest')">New request</button>` : ""}</div>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>${isManager ? "Staff Requests" : "Your Requests"}</h2><span>${rows.length} total</span></div>
+      <table>
+        <thead><tr>${isManager ? "<th>From</th>" : ""}<th>Type</th><th>Subject</th><th>Details</th><th>Status</th>${isManager ? "<th>Action</th>" : ""}</tr></thead>
+        <tbody>
+          ${
+            rows.map((r) => staffRequestRow(r, isManager)).join("") ||
+            `<tr><td colspan="${isManager ? 6 : 4}" class="empty">${isManager ? "No requests yet." : "You haven't sent any requests yet."}</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function staffRequestRow(request, isManager) {
+  const busy = state.staffRequestBusy === request.id;
+  const details =
+    request.kind === "holiday"
+      ? `${request.startDate || "?"} → ${request.endDate || "?"}${request.message ? ` · ${request.message}` : ""}`
+      : request.message || "—";
+  return `
+    <tr>
+      ${isManager ? `<td>${request.instructorName}</td>` : ""}
+      <td>${badge(request.kind === "holiday" ? "Time off" : "Message")}</td>
+      <td><strong>${request.subject}</strong></td>
+      <td>${details}</td>
+      <td>${badge(request.status.charAt(0).toUpperCase() + request.status.slice(1))}</td>
+      ${
+        isManager
+          ? `<td>
+              <button onclick="setStaffRequestStatus('${request.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Approve"}</button>
+              <button onclick="setStaffRequestStatus('${request.id}', 'denied')" ${busy ? "disabled" : ""}>Deny</button>
+              <button onclick="setStaffRequestStatus('${request.id}', 'read')" ${busy ? "disabled" : ""}>Mark read</button>
+            </td>`
+          : ""
+      }
+    </tr>
+  `;
+}
+
+async function setStaffRequestStatus(id, status) {
+  if (!state.session) return;
+  state.staffRequestBusy = id;
+  renderContentOnly();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    await fetch(`${base}/rest/v1/staff_requests?id=eq.${id}`, {
+      method: "PATCH",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ status }),
+    });
+    await refreshAfterWrite();
+  } finally {
+    state.staffRequestBusy = null;
+    renderContentOnly();
+  }
 }
 
 function escapeHtml(value) {
@@ -2547,6 +2954,14 @@ window.handleAddAssignment = handleAddAssignment;
 window.renderModalGroupOptions = renderModalGroupOptions;
 window.renderAssignmentGroupOptions = renderAssignmentGroupOptions;
 window.supabaseDownloadFile = supabaseDownloadFile;
+window.selectStudent = selectStudent;
+window.setStudentClassFilter = setStudentClassFilter;
+window.exportStudentsCsv = exportStudentsCsv;
+window.renderAttendanceRoster = renderAttendanceRoster;
+window.handleTakeAttendance = handleTakeAttendance;
+window.toggleStaffRequestDates = toggleStaffRequestDates;
+window.handleAddStaffRequest = handleAddStaffRequest;
+window.setStaffRequestStatus = setStaffRequestStatus;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;

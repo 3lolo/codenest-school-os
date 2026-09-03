@@ -116,6 +116,29 @@ Added in `supabase/migrations/0006_instructor_operations.sql`:
   Instructor-write policy on `assignments` did not need to change, only
   the read policy did.
 
+### Attendance and Staff Requests
+
+Added in `supabase/migrations/0007_staff_requests_attendance.sql`:
+
+- **Attendance** (`attendance_records`): one row per student per class
+  per day, written by the "Take attendance" modal via a PostgREST upsert
+  (`Prefer: resolution=merge-duplicates`, keyed on the table's
+  `unique (student_id, class_id, session_date)` constraint), so
+  re-submitting a day overwrites it instead of duplicating rows. Reads
+  and writes are scoped the same way as `materials`/`assignments` — a
+  Manager sees everything, an Instructor only their own classes, and a
+  Student/Parent only through `public.can_view_student()`. The Attendance
+  tab's older per-student counters on `students` (`attendance`,
+  `absences`, `late`) are untouched by this — they're a separate,
+  manually-maintained summary, not derived from `attendance_records` yet.
+- **Staff Requests** (`staff_requests`): an Instructor sends a `message`
+  or a `holiday` request (with optional start/end dates); a Manager reads
+  every request (`public.is_admin()`) and is the only one who can change
+  its `status` (`pending` / `approved` / `denied` / `read`) — an
+  Instructor can insert and read their own requests but has no update
+  policy at all, so a sent request can't be edited or its decision
+  overwritten after the fact.
+
 ## Marketing Homepage
 
 `src/app.js` renders a public marketing screen (`marketingScreen()`) as
