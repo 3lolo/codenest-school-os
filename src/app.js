@@ -2888,6 +2888,7 @@ async function handleLoginSubmit(event) {
     await hydrateSessionFromToken(session);
     await loadFromSupabase(state.session?.access_token);
     recomputeInstructorClassIds();
+    resetIdleTimer();
   } catch (error) {
     state.authError = error.message || "Could not sign in.";
     state.authMode = "signed-out";
@@ -2898,6 +2899,7 @@ async function handleLoginSubmit(event) {
 }
 
 async function handleSignOut() {
+  clearIdleTimer();
   await authSignOut(config, state.session);
   state.session = null;
   state.profile = null;
@@ -2910,6 +2912,71 @@ async function handleSignOut() {
   await loadFromSupabase();
   render();
 }
+
+// ---------------------------------------------------------------------
+// Idle auto sign-out: signs a person out automatically after 3 minutes
+// with no mouse, keyboard, touch, or scroll activity, so a school/library
+// computer left unattended doesn't stay logged in to a real Manager,
+// Instructor, or Student account. Only ever active while someone is
+// actually signed in (`signed-in` or `force-password`) — it never fires
+// on the public marketing page or the login screen itself.
+// ---------------------------------------------------------------------
+
+const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+let idleTimer = null;
+let idleActivityThrottleAt = 0;
+
+function isAuthenticatedMode() {
+  return Boolean(state.session) && (state.authMode === "signed-in" || state.authMode === "force-password");
+}
+
+function clearIdleTimer() {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+}
+
+function resetIdleTimer() {
+  clearIdleTimer();
+  if (!isAuthenticatedMode()) return;
+  idleTimer = setTimeout(handleIdleTimeout, IDLE_TIMEOUT_MS);
+}
+
+async function handleIdleTimeout() {
+  // Guards against a stray fire racing a manual sign-out.
+  if (!isAuthenticatedMode()) return;
+  clearIdleTimer();
+  await authSignOut(config, state.session);
+  state.session = null;
+  state.profile = null;
+  state.viewerContext = null;
+  state.accountsDirectory = null;
+  state.leadsDirectory = null;
+  state.role = "Super Admin";
+  state.view = "dashboard";
+  state.authMode = "signed-out";
+  state.authError = "You were signed out after 3 minutes of inactivity. Please sign back in.";
+  render();
+}
+
+// Throttled so a burst of mousemove/scroll events doesn't clear and
+// reschedule the timer hundreds of times a second — resetting once a
+// second is more than enough to track "is someone still here."
+function onIdleActivity() {
+  const now = Date.now();
+  if (now - idleActivityThrottleAt < 1000) return;
+  idleActivityThrottleAt = now;
+  resetIdleTimer();
+}
+
+["mousemove", "mousedown", "keydown", "touchstart", "wheel", "scroll"].forEach((type) => {
+  window.addEventListener(type, onIdleActivity, { passive: true, capture: true });
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") resetIdleTimer();
+});
 
 async function handleForcePasswordSubmit(event) {
   event.preventDefault();
@@ -2945,6 +3012,7 @@ async function handleForcePasswordSubmit(event) {
     });
     state.profile.must_change_password = false;
     state.authMode = "signed-in";
+    resetIdleTimer();
   } catch (error) {
     state.authError = error.message || "Could not update your password.";
   } finally {
@@ -3028,6 +3096,7 @@ async function initApp() {
   await bootstrapAuthSession();
   await loadFromSupabase(state.session?.access_token);
   recomputeInstructorClassIds();
+  resetIdleTimer();
   render();
 }
 

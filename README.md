@@ -258,6 +258,20 @@ Vercel automatically deploys everything under `/api` as serverless
 functions regardless of the static output directory, so no extra
 configuration is needed for account creation to work once deployed.
 
+## Auto Sign-Out After 3 Minutes Idle
+
+Once signed in, the app watches for mouse movement, clicks, keystrokes,
+scrolling, and touch — if none of that happens for **3 minutes**, it signs
+the person out automatically and shows "You were signed out after 3
+minutes of inactivity" on the login screen. This protects a shared or
+public computer (a classroom, a library) from being left logged in to a
+real Manager/Instructor/Student account. It only runs while someone is
+actually signed in — never on the public marketing homepage or the login
+screen itself, and it doesn't fire from background activity, only real
+input. There's no setting to change the 3-minute window from the UI yet;
+it's the `IDLE_TIMEOUT_MS` constant near the auth handlers in
+`src/app.js`.
+
 ## Logging In
 
 There is no demo mode. Visiting the site always shows the marketing
