@@ -15,15 +15,11 @@ import {
 const navItems = [
   ["dashboard", "Dashboard"],
   ["students", "Students"],
-  ["families", "Families"],
   ["classes", "Classes"],
   ["assignments", "Assignments"],
   ["attendance", "Attendance"],
-  ["communications", "Messages"],
   ["reports", "Reports"],
-  ["notifications", "Notifications"],
   ["settings", "Settings"],
-  ["audit", "Audit"],
 ];
 
 const students = [
@@ -34,35 +30,32 @@ const students = [
 
 test("student role cannot access admin-only modules", () => {
   assert.equal(canAccessModule("Student", "settings"), false);
-  assert.equal(canAccessModule("Student", "audit"), false);
   assert.equal(canAccessModule("Student", "reports"), false);
-  assert.equal(canAccessModule("Student", "families"), false);
+  assert.equal(canAccessModule("Student", "instructors"), false);
 });
 
 test("parent role cannot access staff/admin modules", () => {
   assert.equal(canAccessModule("Parent", "settings"), false);
-  assert.equal(canAccessModule("Parent", "audit"), false);
   assert.equal(canAccessModule("Parent", "reports"), false);
-  assert.equal(canAccessModule("Parent", "families"), false);
+  assert.equal(canAccessModule("Parent", "instructors"), false);
 });
 
-test("instructor role cannot access settings, audit logs, or family directory", () => {
+test("instructor role cannot access settings or the instructors directory", () => {
   assert.equal(canAccessModule("Instructor", "settings"), false);
-  assert.equal(canAccessModule("Instructor", "audit"), false);
-  assert.equal(canAccessModule("Instructor", "families"), false);
+  assert.equal(canAccessModule("Instructor", "instructors"), false);
 });
 
 test("admin roles can access reporting while only super admin can access platform settings", () => {
   assert.equal(canAccessModule("School Admin", "reports"), true);
   assert.equal(canAccessModule("School Admin", "settings"), false);
   assert.equal(canAccessModule("Super Admin", "settings"), true);
-  assert.equal(canAccessModule("Super Admin", "audit"), true);
+  assert.equal(canAccessModule("Super Admin", "instructors"), true);
 });
 
 test("visible navigation is derived from role permissions", () => {
   assert.deepEqual(
     visibleModulesForRole("Student", navItems).map(([id]) => id),
-    ["dashboard", "assignments", "attendance", "communications", "notifications"],
+    ["dashboard", "assignments", "attendance"],
   );
 });
 
@@ -138,7 +131,6 @@ test("global search removes rows outside viewer scope", () => {
     { type: "Student", student: students[0], title: "Maya" },
     { type: "Student", student: students[1], title: "Omar" },
     { type: "Instructor", title: "Amina", staffOnly: true },
-    { type: "Parent", title: "Dina", familyOnly: true },
     { type: "Assignment", title: "Number Game", moduleId: "assignments" },
   ]);
 

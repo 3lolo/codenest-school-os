@@ -6,7 +6,91 @@ Date: 2026-09-06
 
 Passed: 21 / 21 automated tests.
 
-## Latest Update: A Failed Table Could Hide Every Other Tab's Data, Plus a Second Recursion Spot in Assignments
+## Latest Update: Finalized Every Tab — Removed 4 Dead Ones, Made Reports & Settings Real
+
+The Manager asked for a final pass over every tab: double-check each one
+and remove anything unimportant. This was done by reading every tab's
+render function and every button in it, then grepping the *entire*
+codebase (frontend and every Supabase migration) for a matching write
+path — a button that looks actionable but has no `onclick` handler, and
+no table/column anywhere it could ever write to, is not a smaller version
+of a real feature; it's dead UI that only erodes trust in the tabs that
+do work. No live browser testing was available for this pass (no site
+URL or Manager login was provided), so every finding below is backed by
+a full-codebase search, not a click-through.
+
+**Removed — zero working buttons, zero write paths, confirmed by
+grepping the whole repo:**
+
+- **Families** — a read-only directory over a `parents`/`families`
+  concept that was never wired to any table the rest of the app
+  populates. The real "Parent" *role* (the login type, `parentDashboard()`)
+  is untouched and still works; only this separate admin-facing directory
+  tab is gone.
+- **Messages / Communications** — a timeline view with no compose form,
+  no `onclick` on any of its buttons, and no `communications` table
+  written to anywhere in the app or its migrations.
+- **Notifications** — a bell icon and a list, both entirely static;
+  nothing in the app ever inserts a row a notification could represent,
+  and there is no `notifications` table in any migration.
+- **Audit Log** — displayed a hand-written array that never changed; no
+  code anywhere appends to it, and there is no `audit_logs` table.
+
+Removing these took the sidebar from 17 items down to 13, deleted the
+now-dead render functions (`families()`, `communicationsView()`,
+`communicationTimeline()`, `notificationsView()`, `auditView()`) and
+their permission entries in `src/security.js`, and cleaned up the
+now-orphaned CSS (`.notification`, `.notification.unread`, and the
+shared `.timeline`/`.notification` selectors, including a leftover pair
+in a mobile media query that a first pass missed).
+
+**Fixed instead of removed — these had the same "looks real, isn't"
+problem, but a real backing table already existed, so they were wired up
+instead of deleted:**
+
+- **Reports → Export PDF / Schedule report / Filter** had no `onclick`
+  handlers at all. The PDF/schedule buttons were removed (no real
+  reporting-export pipeline exists yet, and faking one would be worse
+  than not offering it), but **Export CSV** is now a real download built
+  from the same enrollment/attendance/academic numbers already on the
+  page — the same Blob + `URL.createObjectURL` pattern the Students tab's
+  CSV export already used, so it matches an established, tested pattern
+  rather than introducing a new one.
+- **Settings** had a form with a submit button and no `onsubmit` at all —
+  every field silently did nothing. It's now a real form that `PATCH`es
+  the existing `school_settings` table (school name, portal URL, absence
+  threshold, due-soon hours, upload limit, parent-assignment-email
+  toggle) through PostgREST with the signed-in user's own session, so
+  it's covered by the same RLS `public.is_admin()` policy every other
+  admin write already goes through — no new policy needed.
+
+**Bug found and fixed as a byproduct of wiring up Settings:** the
+`school_settings` reload after a successful fetch reassigned `school` as
+a brand-new object (`{name, portalUrl, settings}`), which dropped
+`school.social` (the Facebook/WhatsApp links) on the floor. It never
+showed up as an error immediately — `socialLinksHtml()` would only throw
+`Cannot read properties of undefined (reading 'whatsapp')` the *next*
+time the marketing homepage rendered for someone who had signed in and
+back out, since `school.social` doesn't get re-populated from
+`school_settings` (which doesn't store it) and was quietly relying on
+never being overwritten. Fixed by spreading `...school` first and only
+overwriting the specific fields `school_settings` actually stores.
+
+Re-verified after all of the above: `node --check src/app.js` and
+`src/security.js`, `npm test` (21/21 — the suite's own `navItems`
+fixture and three tests that referenced "families"/"audit" were updated
+to match the new 13-tab navigation), and `npm run build`.
+
+**Still open, unchanged by this pass:** the visual/CSS redesign the
+Manager asked for ("best professional dashboard") has not started yet —
+this pass was scoped to correctness and dead-code removal only. Live
+click-through testing across every role is also still blocked on a site
+URL and Manager login, which have been requested twice and not yet
+provided; everything above was verified by static analysis and, for the
+RLS-related pieces earlier in this file, against a real local Postgres
+instance — not by clicking through the deployed app itself.
+
+## Earlier Update: A Failed Table Could Hide Every Other Tab's Data, Plus a Second Recursion Spot in Assignments
 
 After the previous fix shipped, the Manager reported the 500s were
 "still the same" on the live site, and separately that a newly-added

@@ -11,6 +11,30 @@ This first implementation is a self-contained frontend foundation using plain HT
 - Storage: S3-compatible object storage with signed URLs and strict access checks.
 - Email: Provider abstraction for SES, SendGrid, Postmark, or SMTP.
 
+## Currently Shipped vs. Aspirational
+
+Most of this document (from here through "Application Domains",
+"Notification Architecture", and the `/families` / `/communications` /
+`/notifications` / `/audit-logs` entries under "API Boundaries") describes
+a possible *future* production backend — none of it is built. What's
+actually shipped today is the vanilla-JS + Supabase app described in the
+"RBAC Model" and later sections ("Credential Issuance", "Groups,
+Materials, and Group-Scoped Assignments", "Attendance and Staff
+Requests", "Marketing Homepage").
+
+As of 2026-09-06 the shipped app's sidebar has 13 tabs: Dashboard,
+Instructors, Students, Classes, Assignments, Attendance, Requests
+(Staff Requests), Reports, Materials, Accounts & Logins, Contact
+Requests, Reviews, and Settings. Four tabs that once existed in the
+UI — Families, Messages/Communications, Notifications, and an Audit
+Log — were removed: none of them had a working button or a backing
+table anywhere in the shipped schema, confirmed by grepping the full
+codebase. See `docs/security-test-report.md` for details. This
+document's Notification Architecture / families / audit-log sections
+below are kept as design notes for if those get built for real later —
+they are not a description of removed functionality regressing, since
+none of it was ever implemented in the first place.
+
 ## Application Domains
 
 - Identity and access: users, roles, permissions, invitations, sessions, password resets.

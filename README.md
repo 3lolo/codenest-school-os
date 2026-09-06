@@ -163,6 +163,38 @@ only their own requests and the status a Manager gave them — they can
 send a new one but can't edit or delete a sent request, so it stays a
 reliable record of what was actually asked and decided.
 
+## Sidebar Tabs — What's Here and Why (as of 2026-09-06)
+
+The sidebar currently has 13 tabs, all of them backed by a real table and
+a real write path: **Dashboard, Instructors, Students, Classes,
+Assignments, Attendance, Requests, Reports, Materials, Accounts &
+Logins, Contact Requests, Reviews, Settings** (Settings is Manager-only;
+see "Account Types" above for what each role can see).
+
+Four tabs that used to exist here — **Families**, **Messages**, **Notifications**,
+and **Audit Log** — were removed after a full-codebase check found none
+of them had a single working button or any table they could write to;
+they were placeholders left over from an earlier draft, not features
+anyone had started building out. The **Parent** login/role itself is
+unaffected — that's still a real account type with its own dashboard,
+this was only a separate admin-facing directory tab. If a real family
+directory, staff messaging, notification center, or audit trail is
+wanted later, that's new work to scope, not something to "turn back on."
+
+Two tabs that looked similarly unfinished had a real table to attach to,
+so they were fixed instead of removed:
+
+- **Reports** — Export CSV now downloads a real file built from the
+  numbers already on the page. The PDF export and "schedule a report"
+  buttons were removed rather than left as dead buttons, since no export
+  pipeline for those exists yet.
+- **Settings** — Save changes now really saves (school name, portal URL,
+  absence threshold, due-soon hours, upload limit, parent-assignment
+  emails) to the `school_settings` table.
+
+See `docs/security-test-report.md` for the full list of what was checked
+and how.
+
 ## Local Checks
 
 ```bash

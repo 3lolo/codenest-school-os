@@ -13,11 +13,11 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "reports", "notifications", "accounts", "leads", "reviews", "settings", "audit"],
-  "School Admin": ["dashboard", "instructors", "students", "families", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "reports", "notifications", "accounts", "leads", "reviews"],
-  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "communications", "staffRequests", "notifications", "accounts"],
-  Student: ["dashboard", "assignments", "materials", "attendance", "communications", "notifications"],
-  Parent: ["dashboard", "students", "assignments", "materials", "attendance", "communications", "notifications"],
+  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "settings"],
+  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews"],
+  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "accounts"],
+  Student: ["dashboard", "assignments", "materials", "attendance"],
+  Parent: ["dashboard", "students", "assignments", "materials", "attendance"],
 };
 
 // Manager (Super Admin or School Admin) can issue Manager, Instructor, and
@@ -76,15 +76,10 @@ export function canViewStaffDirectory(viewer) {
   return ["Super Admin", "School Admin"].includes(viewer.role);
 }
 
-export function canViewFamilyDirectory(viewer) {
-  return ["Super Admin", "School Admin"].includes(viewer.role);
-}
-
 export function safeSearchRowsForViewer(viewer, rows) {
   return rows.filter((row) => {
     if (row.student && !canViewStudent(viewer, row.student)) return false;
     if (row.staffOnly && !canViewStaffDirectory(viewer)) return false;
-    if (row.familyOnly && !canViewFamilyDirectory(viewer)) return false;
     if (row.moduleId && !canAccessModule(viewer.role, row.moduleId)) return false;
     return true;
   });

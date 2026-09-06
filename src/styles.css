@@ -202,27 +202,6 @@ h2 {
   background: #fff;
 }
 
-.notification-button {
-  position: relative;
-  width: 42px;
-  padding: 0;
-  font-size: 20px;
-}
-
-.notification-button b {
-  position: absolute;
-  top: -7px;
-  right: -7px;
-  background: var(--coral);
-  color: #fff;
-  border-radius: 99px;
-  min-width: 20px;
-  height: 20px;
-  font-size: 12px;
-  display: grid;
-  place-items: center;
-}
-
 .content {
   padding: 24px;
   display: grid;
@@ -284,7 +263,6 @@ dt {
 .action,
 .student-card,
 .class-row,
-.notification,
 .results article {
   display: flex;
   gap: 12px;
@@ -295,8 +273,7 @@ dt {
 
 .action:first-of-type,
 .student-card:first-of-type,
-.class-row:first-of-type,
-.notification:first-of-type {
+.class-row:first-of-type {
   border-top: 0;
 }
 
@@ -467,7 +444,6 @@ dd {
   gap: 12px;
 }
 
-.timeline article,
 .results article {
   display: grid;
   grid-template-columns: 150px 1fr;
@@ -476,26 +452,12 @@ dd {
   border-top: 1px solid var(--line);
 }
 
-.timeline article:first-child,
 .results article:first-child {
   border-top: 0;
 }
 
-.timeline small,
 .results small {
   grid-column: 2;
-}
-
-.notification {
-  display: grid;
-  grid-template-columns: 170px 1fr auto;
-}
-
-.notification.unread {
-  background: #f3fbfa;
-  margin-inline: -10px;
-  padding-inline: 10px;
-  border-radius: 8px;
 }
 
 .settings-grid .panel {
@@ -567,13 +529,10 @@ code {
     grid-template-columns: 1fr;
   }
 
-  .notification,
-  .timeline article,
   .results article {
     grid-template-columns: 1fr;
   }
 
-  .timeline small,
   .results small {
     grid-column: auto;
   }

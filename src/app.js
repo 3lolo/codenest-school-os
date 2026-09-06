@@ -47,6 +47,9 @@ const state = {
   selectedStudentId: null,
   studentClassFilter: "",
   staffRequestBusy: null,
+  settingsBusy: false,
+  settingsError: "",
+  settingsNotice: "",
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -60,20 +63,16 @@ const navItems = [
   ["dashboard", "Dashboard", "grid"],
   ["instructors", "Instructors", "users"],
   ["students", "Students", "users"],
-  ["families", "Families", "home"],
   ["classes", "Classes", "layers"],
   ["assignments", "Assignments", "clipboard"],
   ["attendance", "Attendance", "check"],
-  ["communications", "Messages", "message"],
   ["staffRequests", "Requests", "message"],
   ["reports", "Reports", "chart"],
-  ["notifications", "Notifications", "bell"],
   ["materials", "Materials", "folder"],
   ["accounts", "Accounts & Logins", "key"],
   ["leads", "Contact Requests", "message"],
   ["reviews", "Reviews", "chart"],
   ["settings", "Settings", "gear"],
-  ["audit", "Audit", "shield"],
 ];
 
 // Production defaults. Nothing here is sample/demo content — every list
@@ -81,6 +80,7 @@ const navItems = [
 // `school` holds the editable defaults for a brand-new deployment before
 // a Manager opens Settings and changes them.
 let school = {
+  id: null,
   name: "Hero Tech Academy",
   portalUrl: "",
   social: {
@@ -97,15 +97,11 @@ let school = {
 
 let people = {
   students: [],
-  parents: [],
   instructors: [],
 };
 
 let classes = [];
 let assignments = [];
-let communications = [];
-let auditLogs = [];
-let notifications = [];
 let groups = [];
 let groupMembers = [];
 let materials = [];
@@ -179,7 +175,6 @@ function badge(value) {
 
 function shell() {
   const allowedNav = visibleModulesForRole(state.role, navItems);
-  const unread = notifications.filter((item) => item.unread).length;
   return `
     <aside class="sidebar">
       <div class="brand">
@@ -211,12 +206,8 @@ function shell() {
         </div>
         <label class="search">
           <span>Search</span>
-          <input type="search" placeholder="Students, parents, classes, assignments" value="${state.query}" oninput="setSearch(this.value)" />
+          <input type="search" placeholder="Students, classes, assignments" value="${state.query}" oninput="setSearch(this.value)" />
         </label>
-        <button class="notification-button" onclick="navigate('notifications')" aria-label="${unread} unread notifications">
-          <span>${icons.bell}</span>
-          ${unread ? `<b>${unread}</b>` : ""}
-        </button>
         <div class="account-chip">
           <div>
             <strong>${state.profile?.full_name || state.session?.user?.email || roleLabel(state.role)}</strong>
@@ -236,20 +227,16 @@ function titleForView() {
     dashboard: `${roleLabel(state.role)} Dashboard`,
     instructors: "Instructor Management",
     students: state.role === "Parent" ? "Linked Children" : "Student Management",
-    families: "Family Management",
     classes: "Courses and Classes",
     assignments: "Assignment Center",
     materials: "Class Materials",
     attendance: "Attendance",
-    communications: "Communication Center",
     staffRequests: ["Super Admin", "School Admin"].includes(state.role) ? "Staff Requests" : "Requests to Managers",
     reports: "Reports",
-    notifications: "Notification Center",
     accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
     leads: "Contact Requests",
     reviews: "Reviews",
     settings: "School Settings",
-    audit: "Audit Logs",
   }[state.view];
 }
 
@@ -259,20 +246,16 @@ function content() {
     dashboard: dashboard(),
     instructors: instructorsView(),
     students: students(),
-    families: families(),
     classes: classesView(),
     assignments: assignmentsView(),
     materials: materialsView(),
     attendance: attendanceView(),
-    communications: communicationsView(),
     staffRequests: staffRequestsView(),
     reports: reportsView(),
-    notifications: notificationsView(),
     accounts: accountsView(),
     leads: leadsView(),
     reviews: reviewsView(),
     settings: settingsView(),
-    audit: auditView(),
   }[state.view] || dashboard();
 }
 
@@ -339,8 +322,21 @@ function adminDashboard() {
     </div>
     <div class="two-col">
       ${recentStudents()}
-      ${communicationTimeline()}
+      ${recentAssignmentsPanel()}
     </div>
+  `;
+}
+
+// Pairs with recentStudents() in the admin dashboard's second row — real
+// data (assignments actually created through "New assignment"), soonest
+// due date first.
+function recentAssignmentsPanel() {
+  const recent = [...assignments].sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 6);
+  return `
+    <section class="panel">
+      <div class="panel-head"><h2>Recent Assignments</h2><button onclick="navigate('assignments')">Open</button></div>
+      ${recent.map((a) => `<div class="report-row"><span>${a.title} · ${a.className}</span><strong>${badge(a.status)}</strong></div>`).join("") || `<p class="empty">No assignments yet.</p>`}
+    </section>
   `;
 }
 
@@ -416,9 +412,8 @@ function parentDashboard() {
       ${metric("Child attendance", `${child.attendance}%`, "Healthy")}
       ${metric("Average grade", `${child.avgGrade}%`, "Latest grade published")}
       ${metric("Assignments", `${openAssignments} open`, "Published")}
-      ${metric("Messages", communications.length, "In communication history")}
     </div>
-    <div class="two-col">${studentProfile(child)}${communicationTimeline()}</div>
+    ${studentProfile(child)}
   `;
 }
 
@@ -547,18 +542,6 @@ function className(id) {
   return classes.find((item) => item.id === id)?.name || "Unassigned";
 }
 
-function families() {
-  return `
-    <div class="toolbar"><button>New family</button><button>Link child</button><button>Send activation</button></div>
-    <section class="panel table-panel">
-      <table>
-        <thead><tr><th>Guardian</th><th>Children</th><th>Preference</th><th>Status</th></tr></thead>
-        <tbody>${people.parents.map((p) => `<tr><td><strong>${p.name}</strong><span>${p.email}</span></td><td>${p.children.join(", ")}</td><td>${p.preference}</td><td>${badge(p.status)}</td></tr>`).join("")}</tbody>
-      </table>
-    </section>
-  `;
-}
-
 function classesView() {
   const canAddClass = canCreateClasses(state.role);
   const canAddStudent = canCreateStudentProfiles(state.role);
@@ -664,74 +647,68 @@ function groupAttendanceBySession(records) {
   return [...sessions.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
-function communicationsView() {
-  return `
-    <div class="toolbar"><button>Compose</button><button>Class announcement</button><button>School-wide</button></div>
-    ${communicationTimeline()}
-  `;
-}
-
-function communicationTimeline() {
-  return `
-    <section class="panel">
-      <div class="panel-head"><h2>Communication History</h2><button>Open queue</button></div>
-      <div class="timeline">
-        ${communications.map((item) => `<article><span>${item.time}</span><strong>${item.subject}</strong><small>${item.type} · ${item.recipient} · ${item.status}</small></article>`).join("")}
-      </div>
-    </section>
-  `;
-}
-
 function reportsView() {
   const activeStudents = people.students.filter((s) => s.status === "Active").length;
   const pausedStudents = people.students.filter((s) => s.status === "Paused").length;
   const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
   const lateArrivals = people.students.reduce((sum, s) => sum + (s.late || 0), 0);
   const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
-  const unreadNotifications = notifications.filter((n) => n.unread).length;
 
   return `
-    <div class="toolbar"><button>Export CSV</button><button>Export PDF</button><button>Schedule report</button></div>
+    <div class="toolbar"><button onclick="exportReportsCsv()">Export CSV</button></div>
     <div class="report-grid">
       <section class="panel">${reportBlock("Enrollment", [["Active", activeStudents], ["Paused", pausedStudents], ["Total", people.students.length]])}</section>
       <section class="panel">${reportBlock("Attendance", [["Average", `${average(people.students.map((s) => s.attendance))}%`], ["At risk", attendanceAlerts], ["Late arrivals", lateArrivals]])}</section>
       <section class="panel">${reportBlock("Academic", [["Completion", `${average(classes.map((c) => c.completion))}%`], ["Average grade", `${average(people.students.map((s) => s.avgGrade))}%`], ["Ungraded", pending]])}</section>
-      <section class="panel">${reportBlock("Notifications", [["Total", notifications.length], ["Unread", unreadNotifications], ["Read", notifications.length - unreadNotifications]])}</section>
     </div>
   `;
 }
 
 function reportBlock(title, rows) {
-  return `<div class="panel-head"><h2>${title}</h2><button>Filter</button></div>${rows.map(([label, value]) => `<div class="report-row"><span>${label}</span><strong>${value}</strong></div>`).join("")}`;
+  return `<div class="panel-head"><h2>${title}</h2></div>${rows.map(([label, value]) => `<div class="report-row"><span>${label}</span><strong>${value}</strong></div>`).join("")}`;
 }
 
-function notificationsView() {
-  return `
-    <div class="toolbar"><button>Mark all read</button><button>Preferences</button><button>Email templates</button></div>
-    <section class="panel">
-      ${notifications.map((n) => `<article class="notification ${n.unread ? "unread" : ""}"><span>${n.type}</span><strong>${n.title}</strong><small>${n.time}</small></article>`).join("")}
-    </section>
-  `;
+// Exports the same summary numbers shown on screen, so what a Manager
+// downloads always matches what they were just looking at.
+function exportReportsCsv() {
+  const activeStudents = people.students.filter((s) => s.status === "Active").length;
+  const pausedStudents = people.students.filter((s) => s.status === "Paused").length;
+  const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
+  const lateArrivals = people.students.reduce((sum, s) => sum + (s.late || 0), 0);
+  const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
+
+  const rows = [
+    ["Section", "Metric", "Value"],
+    ["Enrollment", "Active", activeStudents],
+    ["Enrollment", "Paused", pausedStudents],
+    ["Enrollment", "Total", people.students.length],
+    ["Attendance", "Average", `${average(people.students.map((s) => s.attendance))}%`],
+    ["Attendance", "At risk", attendanceAlerts],
+    ["Attendance", "Late arrivals", lateArrivals],
+    ["Academic", "Completion", `${average(classes.map((c) => c.completion))}%`],
+    ["Academic", "Average grade", `${average(people.students.map((s) => s.avgGrade))}%`],
+    ["Academic", "Ungraded", pending],
+  ];
+  const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "reports-summary.csv";
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 function settingsView() {
   return `
-    <div class="settings-grid">
-      <section class="panel"><h2>School</h2><label>School name<input value="${school.name}" /></label><label>Portal URL<input value="${school.portalUrl}" /></label></section>
-      <section class="panel"><h2>Notifications</h2><label>Absence threshold<input type="number" value="${school.settings.absenceThreshold}" /></label><label>Due soon hours<input type="number" value="${school.settings.dueSoonHours}" /></label><label class="checkline"><input type="checkbox" checked /> Parent assignment emails</label></section>
-      <section class="panel"><h2>Security</h2><label class="checkline"><input type="checkbox" checked /> Require activation links</label><label class="checkline"><input type="checkbox" checked /> Force first-login password change</label><label>Upload limit MB<input type="number" value="${school.settings.maxUploadMb}" /></label><p class="hint">Issue or reset an individual instructor/student username and password from <button onclick="navigate('accounts')">Accounts &amp; Logins</button>.</p></section>
-    </div>
-  `;
-}
-
-function auditView() {
-  return `
-    <section class="panel table-panel">
-      <table>
-        <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Entity</th><th>Metadata</th></tr></thead>
-        <tbody>${auditLogs.map((log) => `<tr><td>${log.time}</td><td>${log.actor}</td><td><code>${log.action}</code></td><td>${log.entity}</td><td>${log.meta}</td></tr>`).join("")}</tbody>
-      </table>
-    </section>
+    <form class="settings-grid" onsubmit="handleSaveSettings(event)">
+      ${state.settingsError ? `<p class="auth-error">${state.settingsError}</p>` : ""}
+      ${state.settingsNotice ? `<p class="notice-row m-success">${state.settingsNotice}</p>` : ""}
+      <section class="panel"><h2>School</h2><label>School name<input name="schoolName" value="${school.name}" required /></label><label>Portal URL<input name="portalUrl" value="${school.portalUrl}" /></label></section>
+      <section class="panel"><h2>Attendance &amp; Assignments</h2><label>Absence threshold<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>Due soon hours<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="checkline"><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /> Parent assignment emails</label></section>
+      <section class="panel"><h2>Uploads</h2><label>Upload limit MB<input name="maxUploadMb" type="number" min="1" value="${school.settings.maxUploadMb}" required /></label><p class="hint">Issue or reset an individual instructor/student username and password from <button type="button" onclick="navigate('accounts')">Accounts &amp; Logins</button>.</p></section>
+      <div class="toolbar"><button type="submit" ${state.settingsBusy ? "disabled" : ""}>${state.settingsBusy ? "Saving…" : "Save changes"}</button></div>
+    </form>
   `;
 }
 
@@ -740,7 +717,6 @@ function searchResults() {
   const viewer = currentViewer();
   const rows = safeSearchRowsForViewer(viewer, [
     ...people.students.map((s) => ({ type: "Student", title: fullName(s), detail: `${s.email} · ${className(s.classId)}`, student: s, moduleId: "students" })),
-    ...people.parents.map((p) => ({ type: "Parent", title: p.name, detail: `${p.email} · ${p.children.join(", ")}`, familyOnly: true, moduleId: "families" })),
     ...people.instructors.map((i) => ({ type: "Instructor", title: i.name, detail: `${i.email} · ${i.classes.join(", ")}`, staffOnly: true })),
     ...classes.map((c) => ({ type: "Class", title: c.name, detail: `${c.course} · ${c.instructor}`, moduleId: "classes" })),
     ...assignments.map((a) => ({ type: "Assignment", title: a.title, detail: `${a.course} · due ${a.due}`, moduleId: "assignments" })),
@@ -912,7 +888,7 @@ async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   const failures = [];
-  const TOTAL_TABLES = 14; // must match the number of safeSelect(...) calls below
+  const TOTAL_TABLES = 10; // must match the number of safeSelect(...) calls below
   const safeSelect = (table, select = "*") =>
     supabaseSelect(table, select, token).catch((error) => {
       failures.push({ table, message: error.message || String(error) });
@@ -923,13 +899,9 @@ async function loadFromSupabase(token) {
     const [
       settingsRows,
       studentRows,
-      parentRows,
       instructorRows,
       classRows,
       assignmentRows,
-      communicationRows,
-      auditRows,
-      notificationRows,
       groupRows,
       groupMemberRows,
       materialRows,
@@ -938,13 +910,9 @@ async function loadFromSupabase(token) {
     ] = await Promise.all([
       safeSelect("school_settings"),
       safeSelect("students"),
-      safeSelect("parents"),
       safeSelect("instructors"),
       safeSelect("classes"),
       safeSelect("assignments"),
-      safeSelect("communications"),
-      safeSelect("audit_logs"),
-      safeSelect("notifications"),
       safeSelect("groups"),
       safeSelect("group_members"),
       safeSelect("materials"),
@@ -954,7 +922,12 @@ async function loadFromSupabase(token) {
 
     const settings = settingsRows ? settingsRows[0] : null;
     if (settings) {
+      // Spread the previous `school` first so fields this table doesn't
+      // store (like `social`, the marketing page's Facebook/WhatsApp
+      // links) survive a reload instead of silently disappearing.
       school = {
+        ...school,
+        id: settings.id,
         name: settings.name,
         portalUrl: settings.portal_url,
         settings: settings.settings,
@@ -980,13 +953,6 @@ async function loadFromSupabase(token) {
         absences: student.absences,
         late: student.late,
         notes: student.notes,
-      })),
-      parents: parentRows === null ? people.parents : parentRows.map((parent) => ({
-        name: parent.name,
-        email: parent.email,
-        children: parent.children || [],
-        preference: parent.preference,
-        status: parent.status,
       })),
       instructors: instructorRows === null ? people.instructors : instructorRows.map((instructor) => ({
         name: instructor.name,
@@ -1019,29 +985,6 @@ async function loadFromSupabase(token) {
       total: assignment.total,
       maxGrade: assignment.max_grade,
       difficulty: assignment.difficulty,
-    }));
-
-    communications = communicationRows === null ? communications : communicationRows.map((message) => ({
-      type: message.type,
-      recipient: message.recipient,
-      subject: message.subject,
-      time: message.display_time,
-      status: message.status,
-    }));
-
-    auditLogs = auditRows === null ? auditLogs : auditRows.map((log) => ({
-      actor: log.actor,
-      action: log.action,
-      entity: log.entity,
-      time: log.display_time,
-      meta: log.meta,
-    }));
-
-    notifications = notificationRows === null ? notifications : notificationRows.map((notification) => ({
-      type: notification.type,
-      title: notification.title,
-      time: notification.display_time,
-      unread: notification.unread,
     }));
 
     groups = groupRows === null ? groups : groupRows.map((group) => ({
@@ -1864,6 +1807,67 @@ async function handleAddManager(event) {
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || "Could not add the manager.";
+    render();
+  }
+}
+
+// Only a Super Admin can reach this form at all (see the "settings"
+// permission in security.js), matching the "settings update super admin"
+// RLS policy in 0002_production_rls.sql — so this PATCH is doubly gated,
+// not just hidden client-side.
+async function handleSaveSettings(event) {
+  event.preventDefault();
+  if (!state.session) return;
+  const form = event.target;
+  const name = form.schoolName.value.trim();
+  const portalUrl = form.portalUrl.value.trim();
+  const absenceThreshold = Number(form.absenceThreshold.value);
+  const dueSoonHours = Number(form.dueSoonHours.value);
+  const maxUploadMb = Number(form.maxUploadMb.value);
+  const parentAssignmentEmails = form.parentAssignmentEmails.checked;
+
+  if (!name) {
+    state.settingsError = "School name can't be empty.";
+    render();
+    return;
+  }
+  if (!Number.isFinite(absenceThreshold) || absenceThreshold < 1) {
+    state.settingsError = "Absence threshold must be a number of 1 or more.";
+    render();
+    return;
+  }
+
+  state.settingsBusy = true;
+  state.settingsError = "";
+  state.settingsNotice = "";
+  render();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const nextSettings = { absenceThreshold, dueSoonHours, maxUploadMb, parentAssignmentEmails };
+    const query = school.id ? `?id=eq.${encodeURIComponent(school.id)}` : "";
+    const response = await fetch(`${base}/rest/v1/school_settings${query}`, {
+      method: "PATCH",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify({ name, portal_url: portalUrl, settings: nextSettings }),
+    });
+    const body = await response.json().catch(() => []);
+    if (!response.ok) {
+      throw new Error(body?.message || body?.hint || "Could not save settings.");
+    }
+    if (Array.isArray(body) && body.length === 0) {
+      throw new Error("No school settings row was updated — is more than one row present, or none at all?");
+    }
+    school = { ...school, name, portalUrl, settings: nextSettings };
+    state.settingsNotice = "Settings saved.";
+  } catch (error) {
+    state.settingsError = error.message || "Could not save settings.";
+  } finally {
+    state.settingsBusy = false;
     render();
   }
 }
@@ -3090,6 +3094,8 @@ window.handleTakeAttendance = handleTakeAttendance;
 window.toggleStaffRequestDates = toggleStaffRequestDates;
 window.handleAddStaffRequest = handleAddStaffRequest;
 window.setStaffRequestStatus = setStaffRequestStatus;
+window.exportReportsCsv = exportReportsCsv;
+window.handleSaveSettings = handleSaveSettings;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
