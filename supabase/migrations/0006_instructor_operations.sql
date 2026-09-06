@@ -356,12 +356,7 @@ for select using (
         )
         or (
           assignments.group_id is not null
-          and exists (
-            select 1 from public.group_members gm
-            join public.students student on student.student_id = gm.student_id
-            where gm.group_id = assignments.group_id
-              and public.can_view_student(student.student_id, student.class_id)
-          )
+          and public.can_view_group(assignments.group_id)
         )
       )
   )

@@ -1,12 +1,68 @@
 # Security Test Report
 
-Date: 2026-09-03
+Date: 2026-09-06
 
 ## Result
 
 Passed: 21 / 21 automated tests.
 
-## Latest Update: Fixed a Real RLS Recursion Bug (500s on Groups/Materials) and a Confusing 409 on Instructors
+## Latest Update: A Failed Table Could Hide Every Other Tab's Data, Plus a Second Recursion Spot in Assignments
+
+After the previous fix shipped, the Manager reported the 500s were
+"still the same" on the live site, and separately that a newly-added
+instructor didn't show up on the Instructors tab. Both traced back to
+the same underlying fragility, found by reading `loadFromSupabase()`
+(the function every tab's data comes from) closely rather than guessing:
+
+**The real bug.** `loadFromSupabase()` fetched all ~14 tables with
+`Promise.all(...)`. Four of them (`groups`, `group_members`,
+`materials`, `attendance_records`/`staff_requests`) were already wrapped
+in `.catch(() => [])` from earlier fixes, but the other nine —
+including `instructors`, `students`, `classes`, and `assignments` — were
+not. `Promise.all` rejects as soon as *any* one of its promises rejects,
+so a single failing table (any one of those nine) aborted the *entire*
+refresh. Because the code only reassigns `people`/`classes`/etc. on
+success, an aborted refresh silently kept every tab showing whatever
+was loaded the *previous* time — including right after adding a new
+instructor: the write itself succeeded, but the follow-up reload that
+should have shown it failed elsewhere and got thrown away wholesale, so
+the new row was sitting in the database the whole time, just never
+re-fetched. The only visible sign was a small "Demo fallback" label in
+the sidebar, easy to miss while looking at a table.
+
+**Fixed:** every one of the ~14 table fetches in `loadFromSupabase()` is
+now wrapped individually. A table that fails keeps showing its last
+successfully-loaded data (never blanked, never silently swapped for
+something stale-and-wrong) while every table that *did* load refreshes
+normally — so one bad table can no longer hide a real write on an
+unrelated tab. The sidebar/topbar status text now also says exactly
+which table(s) failed to load ("Everything loaded except: X, Y")
+instead of a generic "Demo fallback," so a real failure is visible
+instead of silent.
+
+**Second finding while tracing this:** `assignments`'s read policy (in
+`0006_instructor_operations.sql`) had the *same* pattern that caused the
+groups/materials recursion bug — its group-scoped branch queried
+`group_members` directly instead of through `can_view_group()`. Since
+`assignments` was one of the nine tables with no `.catch()`, if this
+ever threw (recursion or otherwise) on a live project, it would have
+silently taken down every other tab's refresh with it, which lines up
+exactly with both symptoms reported. Fixed the same way as the other
+three tables, verified against a real local Postgres instance the same
+way as the original fix (fresh full migration run, and a run against a
+database that already had the *previous* version of `0008` applied) —
+both a Manager, the assignment's own instructor, and an unrelated
+instructor see exactly the right rows, no recursion error either way.
+`supabase/migrations/0008_fix_group_recursion.sql` was updated in place
+to include this — **if you already ran an earlier copy of `0008`,
+running the updated one again is safe** (every statement is
+create-or-replace / drop-and-recreate) and picks up the `assignments`
+fix.
+
+Re-verified: `node --check src/app.js`, `npm test` (21/21), `npm run
+build`.
+
+## Earlier Update: Fixed a Real RLS Recursion Bug (500s on Groups/Materials) and a Confusing 409 on Instructors
 
 A Manager reported four errors from the live site: HTTP 500 on
 `groups`, `group_members`, and `materials`, and HTTP 409 on `instructors`.
@@ -94,7 +150,7 @@ Re-verified: `node --check src/app.js`, `npm test` (21/21), `npm run
 build`, and the static onclick/onsubmit/onchange-to-`window.*` export
 audit (no new handlers were added by this fix).
 
-## Previous Update: Attendance, Staff Requests, Students Tab, and Diagnosing an RLS Error
+## Earlier Update: Attendance, Staff Requests, Students Tab, and Diagnosing an RLS Error
 
 A Manager reported two errors while testing as an Instructor test
 account: `No API key found in request` and `new row violates row-level

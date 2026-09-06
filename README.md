@@ -199,12 +199,18 @@ For real school data with real logins, also run, in order:
    Attendance and Staff Requests tables/policies described above. Also
    safe to run any time after `0002`.
 9. `supabase/migrations/0008_fix_group_recursion.sql` — **run this if you
-   already ran `0006` before this fix landed.** The original `0006`
-   shipped with a real bug: reading Groups or group-scoped Materials
-   could fail with `infinite recursion detected in policy for relation
-   "groups"` (an HTTP 500 in the browser). This patch fixes it in place
-   — safe to run once, and harmless to run again. If you're setting up a
-   brand-new project today, the current `0006` already has this fix
+   already ran `0006` before this fix landed, and re-run it again if you
+   ran an earlier copy of `0008` before 2026-09-06.** The original `0006`
+   shipped with a real bug: reading Groups, group-scoped Materials, or a
+   group-scoped Assignment could fail with `infinite recursion detected
+   in policy for relation "groups"` (an HTTP 500 in the browser) — and
+   because that failure wasn't isolated to just those tabs, it could
+   silently block *every* tab's data from refreshing (a newly-added
+   Instructor not showing up after "Add instructor" was one symptom of
+   this, not a separate bug). This patch fixes the database side of it
+   in place — safe to run once, and harmless to run again, including if
+   you already ran an earlier copy of this same file. If you're setting
+   up a brand-new project today, the current `0006` already has this fix
    baked in, so running `0008` afterward is a no-op but still safe.
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`

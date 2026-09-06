@@ -897,8 +897,27 @@ function nextRefId(prefix, existingIds) {
   return `${prefix}-${String(n).padStart(3, "0")}`;
 }
 
+// One failed table must never hide every other tab's data. Each select
+// below is caught individually: a table that fails to load keeps
+// whatever was already in memory (so a successful earlier load, or data
+// you just wrote and are re-fetching, never gets wiped out and replaced
+// with nothing) while every table that *did* load refreshes normally.
+// This is also why a newly-added row could previously seem to
+// "disappear": before this, a single failing table (e.g. `assignments`,
+// which wasn't wrapped) aborted the entire refresh via Promise.all,
+// silently discarding every table's fresh data — including the row you
+// just added — and leaving the whole dashboard on stale, pre-write data
+// with no visible error beyond a small "Demo fallback" label.
 async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
+
+  const failures = [];
+  const TOTAL_TABLES = 14; // must match the number of safeSelect(...) calls below
+  const safeSelect = (table, select = "*") =>
+    supabaseSelect(table, select, token).catch((error) => {
+      failures.push({ table, message: error.message || String(error) });
+      return null;
+    });
 
   try {
     const [
@@ -917,23 +936,23 @@ async function loadFromSupabase(token) {
       attendanceRows,
       staffRequestRows,
     ] = await Promise.all([
-      supabaseSelect("school_settings", "*", token),
-      supabaseSelect("students", "*", token),
-      supabaseSelect("parents", "*", token),
-      supabaseSelect("instructors", "*", token),
-      supabaseSelect("classes", "*", token),
-      supabaseSelect("assignments", "*", token),
-      supabaseSelect("communications", "*", token),
-      supabaseSelect("audit_logs", "*", token),
-      supabaseSelect("notifications", "*", token),
-      supabaseSelect("groups", "*", token).catch(() => []),
-      supabaseSelect("group_members", "*", token).catch(() => []),
-      supabaseSelect("materials", "*", token).catch(() => []),
-      supabaseSelect("attendance_records", "*", token).catch(() => []),
-      supabaseSelect("staff_requests", "*", token).catch(() => []),
+      safeSelect("school_settings"),
+      safeSelect("students"),
+      safeSelect("parents"),
+      safeSelect("instructors"),
+      safeSelect("classes"),
+      safeSelect("assignments"),
+      safeSelect("communications"),
+      safeSelect("audit_logs"),
+      safeSelect("notifications"),
+      safeSelect("groups"),
+      safeSelect("group_members"),
+      safeSelect("materials"),
+      safeSelect("attendance_records"),
+      safeSelect("staff_requests"),
     ]);
 
-    const settings = settingsRows[0];
+    const settings = settingsRows ? settingsRows[0] : null;
     if (settings) {
       school = {
         name: settings.name,
@@ -943,7 +962,7 @@ async function loadFromSupabase(token) {
     }
 
     people = {
-      students: studentRows.map((student) => ({
+      students: studentRows === null ? people.students : studentRows.map((student) => ({
         id: student.student_id,
         first: student.first_name,
         last: student.last_name,
@@ -962,14 +981,14 @@ async function loadFromSupabase(token) {
         late: student.late,
         notes: student.notes,
       })),
-      parents: parentRows.map((parent) => ({
+      parents: parentRows === null ? people.parents : parentRows.map((parent) => ({
         name: parent.name,
         email: parent.email,
         children: parent.children || [],
         preference: parent.preference,
         status: parent.status,
       })),
-      instructors: instructorRows.map((instructor) => ({
+      instructors: instructorRows === null ? people.instructors : instructorRows.map((instructor) => ({
         name: instructor.name,
         email: instructor.email,
         classes: instructor.classes || [],
@@ -977,7 +996,7 @@ async function loadFromSupabase(token) {
       })),
     };
 
-    classes = classRows.map((item) => ({
+    classes = classRows === null ? classes : classRows.map((item) => ({
       id: item.class_id,
       name: item.name,
       course: item.course,
@@ -989,7 +1008,7 @@ async function loadFromSupabase(token) {
       completion: item.completion,
     }));
 
-    assignments = assignmentRows.map((assignment) => ({
+    assignments = assignmentRows === null ? assignments : assignmentRows.map((assignment) => ({
       title: assignment.title,
       course: assignment.course,
       className: assignment.class_name,
@@ -1002,7 +1021,7 @@ async function loadFromSupabase(token) {
       difficulty: assignment.difficulty,
     }));
 
-    communications = communicationRows.map((message) => ({
+    communications = communicationRows === null ? communications : communicationRows.map((message) => ({
       type: message.type,
       recipient: message.recipient,
       subject: message.subject,
@@ -1010,7 +1029,7 @@ async function loadFromSupabase(token) {
       status: message.status,
     }));
 
-    auditLogs = auditRows.map((log) => ({
+    auditLogs = auditRows === null ? auditLogs : auditRows.map((log) => ({
       actor: log.actor,
       action: log.action,
       entity: log.entity,
@@ -1018,25 +1037,25 @@ async function loadFromSupabase(token) {
       meta: log.meta,
     }));
 
-    notifications = notificationRows.map((notification) => ({
+    notifications = notificationRows === null ? notifications : notificationRows.map((notification) => ({
       type: notification.type,
       title: notification.title,
       time: notification.display_time,
       unread: notification.unread,
     }));
 
-    groups = groupRows.map((group) => ({
+    groups = groupRows === null ? groups : groupRows.map((group) => ({
       id: group.group_id,
       name: group.name,
       classId: group.class_id,
     }));
 
-    groupMembers = groupMemberRows.map((member) => ({
+    groupMembers = groupMemberRows === null ? groupMembers : groupMemberRows.map((member) => ({
       groupId: member.group_id,
       studentId: member.student_id,
     }));
 
-    materials = materialRows.map((material) => ({
+    materials = materialRows === null ? materials : materialRows.map((material) => ({
       id: material.id,
       title: material.title,
       classId: material.class_id,
@@ -1046,7 +1065,7 @@ async function loadFromSupabase(token) {
       createdAt: material.created_at,
     }));
 
-    attendanceRecords = attendanceRows.map((record) => ({
+    attendanceRecords = attendanceRows === null ? attendanceRecords : attendanceRows.map((record) => ({
       id: record.id,
       studentId: record.student_id,
       classId: record.class_id,
@@ -1054,22 +1073,35 @@ async function loadFromSupabase(token) {
       status: record.status,
     }));
 
-    staffRequests = staffRequestRows
-      .map((request) => ({
-        id: request.id,
-        instructorName: request.instructor_name,
-        kind: request.kind,
-        subject: request.subject,
-        message: request.message,
-        startDate: request.start_date,
-        endDate: request.end_date,
-        status: request.status,
-        createdAt: request.created_at,
-      }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    staffRequests = staffRequestRows === null
+      ? staffRequests
+      : staffRequestRows
+          .map((request) => ({
+            id: request.id,
+            instructorName: request.instructor_name,
+            kind: request.kind,
+            subject: request.subject,
+            message: request.message,
+            startDate: request.start_date,
+            endDate: request.end_date,
+            status: request.status,
+            createdAt: request.created_at,
+          }))
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    dataSource.label = "Supabase connected";
-    dataSource.status = "Live data loaded from Supabase";
+    if (failures.length === 0) {
+      dataSource.label = "Supabase connected";
+      dataSource.status = "Live data loaded from Supabase";
+      dataSource.error = "";
+    } else {
+      const failedTables = failures.map((item) => item.table).join(", ");
+      dataSource.label = failures.length === TOTAL_TABLES ? "Demo fallback" : "Partially loaded";
+      dataSource.status =
+        failures.length === TOTAL_TABLES
+          ? "Supabase unavailable, showing the last data loaded successfully."
+          : `Everything loaded except: ${failedTables} (showing the last data loaded successfully for those).`;
+      dataSource.error = failures.map((item) => `${item.table}: ${item.message}`).join(" · ");
+    }
   } catch (error) {
     dataSource.label = "Demo fallback";
     dataSource.status = "Supabase unavailable, using sample data";

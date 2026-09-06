@@ -1,7 +1,12 @@
 -- Patch for a real bug shipped in 0006_instructor_operations.sql: reading
--- any of `groups`, `group_members`, or `materials` from the app could fail
--- with a plain HTTP 500 and a Postgres error of
--- "infinite recursion detected in policy for relation ...".
+-- any of `groups`, `group_members`, `materials`, or a group-scoped
+-- `assignments` row could fail with a plain HTTP 500 and a Postgres error
+-- of "infinite recursion detected in policy for relation ...".
+--
+-- If you already ran an earlier copy of this same file (0008) and are
+-- re-running it now: that's expected and safe. This version additionally
+-- fixes `assignments`, which the first version of this file didn't touch
+-- yet — re-running the rest is a harmless no-op.
 --
 -- Root cause: the original "groups scoped read" policy queried
 -- `group_members` directly (via an EXISTS subquery), and the original
@@ -146,4 +151,41 @@ for all using (
 with check (
   public.is_admin()
   or public.instructor_owns_class(materials.class_id)
+);
+
+-- assignments: the group-scoped branch of its read policy also queried
+-- `group_members` directly. It's less likely to hit the exact "infinite
+-- recursion" error than groups/group_members/materials did (group_members'
+-- own policy no longer queries groups directly, since the fix above), but
+-- routing it through can_view_group() removes the duplicate logic and any
+-- reliance on that being true. If assignments load correctly for you
+-- already, running this part again is a no-op.
+drop policy if exists "assignments scoped read" on public.assignments;
+create policy "assignments scoped read" on public.assignments
+for select using (
+  public.is_admin()
+  or exists (
+    select 1 from public.classes class
+    where class.name = assignments.class_name
+      and (
+        exists (
+          select 1 from public.user_profiles profile
+          where profile.user_id = auth.uid()
+            and profile.role = 'Instructor'
+            and profile.instructor_name = class.instructor
+        )
+        or (
+          assignments.group_id is null
+          and exists (
+            select 1 from public.students student
+            where student.class_id = class.class_id
+              and public.can_view_student(student.student_id, student.class_id)
+          )
+        )
+        or (
+          assignments.group_id is not null
+          and public.can_view_group(assignments.group_id)
+        )
+      )
+  )
 );
