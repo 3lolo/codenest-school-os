@@ -276,10 +276,21 @@ internal operations side, not the homepage's sales pitch. It covers:
   from the in-app **Work With Us** panel (`opportunitiesView()`), gated
   by `public.is_admin()` the same way Reviews is — `for all`, not just
   update, since a Manager can delete a posting outright, not only change
-  its status. There's no separate application table: an interested
-  visitor is pointed at the existing Contact form (`#contact`), so an
-  application lands in the same **Contact Requests** panel every other
-  inquiry does.
+  its status. Clicking a posting opens `opportunityDetailScreen()` — its
+  own screen within the marketing/signed-out flow (`appShell()` swaps to
+  it when `state.opportunityDetail` is set), with a URL of its own
+  (`#opportunity-<id>`, applied by `openOpportunityDetail()` and read
+  back by `applyOpportunityHash()` on load, so the page is directly
+  linkable and survives a refresh). Its "How to apply" section builds a
+  `mailto:` link, pre-filled with a subject naming the role, to
+  `school.settings.careersEmail` (a new field on the existing
+  `school_settings.settings` jsonb blob, set from **Settings → Work
+  With Us** — no migration needed for it, since that column already
+  stores an arbitrary object). There's no separate application table:
+  until a Careers email is set, or for anyone who doesn't want to use
+  it, an interested visitor is pointed at the existing Contact form
+  (`#contact`), so an application lands in the same **Contact Requests**
+  panel every other inquiry does.
 - Facebook and WhatsApp links (`socialLinksHtml()`, driven by
   `school.social.facebook` / `school.social.whatsapp`) shown in the nav,
   the contact section, and the footer.

@@ -57,6 +57,7 @@ const state = {
   opportunitiesDirectory: null,
   opportunitiesBusy: null,
   opportunitiesNotice: null,
+  opportunityDetail: null,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -100,6 +101,7 @@ let school = {
     parentAssignmentEmails: true,
     dueSoonHours: 24,
     maxUploadMb: 25,
+    careersEmail: "",
   },
 };
 
@@ -743,11 +745,12 @@ function exportReportsCsv() {
 function settingsView() {
   return `
     <form class="settings-grid" onsubmit="handleSaveSettings(event)">
-      ${state.settingsError ? `<p class="auth-error">${state.settingsError}</p>` : ""}
-      ${state.settingsNotice ? `<p class="notice-row m-success">${state.settingsNotice}</p>` : ""}
-      <section class="panel"><h2>School</h2><label>School name<input name="schoolName" value="${school.name}" required /></label><label>Portal URL<input name="portalUrl" value="${school.portalUrl}" /></label></section>
+      ${state.settingsError ? `<p class="auth-error">${escapeHtml(state.settingsError)}</p>` : ""}
+      ${state.settingsNotice ? `<p class="notice-row m-success">${escapeHtml(state.settingsNotice)}</p>` : ""}
+      <section class="panel"><h2>School</h2><label>School name<input name="schoolName" value="${escapeHtml(school.name)}" required /></label><label>Portal URL<input name="portalUrl" value="${escapeHtml(school.portalUrl)}" /></label></section>
       <section class="panel"><h2>Attendance &amp; Assignments</h2><label>Absence threshold<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>Due soon hours<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="checkline"><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /> Parent assignment emails</label></section>
       <section class="panel"><h2>Uploads</h2><label>Upload limit MB<input name="maxUploadMb" type="number" min="1" value="${school.settings.maxUploadMb}" required /></label><p class="hint">Issue or reset an individual instructor/student username and password from <button type="button" onclick="navigate('accounts')">Accounts &amp; Logins</button>.</p></section>
+      <section class="panel"><h2>Work With Us</h2><label>Careers email<input name="careersEmail" type="email" value="${escapeHtml(school.settings.careersEmail)}" placeholder="careers@yourschool.com" /></label><p class="hint">Shown on every opportunity's detail page as where applicants should send their CV and cover letter. Leave blank to point applicants at the contact form instead.</p></section>
       <div class="toolbar"><button type="submit" ${state.settingsBusy ? "disabled" : ""}>${state.settingsBusy ? "Saving…" : "Save changes"}</button></div>
     </form>
   `;
@@ -1950,6 +1953,7 @@ async function handleSaveSettings(event) {
   const dueSoonHours = Number(form.dueSoonHours.value);
   const maxUploadMb = Number(form.maxUploadMb.value);
   const parentAssignmentEmails = form.parentAssignmentEmails.checked;
+  const careersEmail = form.careersEmail.value.trim();
 
   if (!name) {
     state.settingsError = "School name can't be empty.";
@@ -1961,6 +1965,11 @@ async function handleSaveSettings(event) {
     render();
     return;
   }
+  if (careersEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(careersEmail)) {
+    state.settingsError = "Careers email doesn't look like a valid email address.";
+    render();
+    return;
+  }
 
   state.settingsBusy = true;
   state.settingsError = "";
@@ -1968,7 +1977,7 @@ async function handleSaveSettings(event) {
   render();
   try {
     const base = config.supabaseUrl.replace(/\/$/, "");
-    const nextSettings = { absenceThreshold, dueSoonHours, maxUploadMb, parentAssignmentEmails };
+    const nextSettings = { absenceThreshold, dueSoonHours, maxUploadMb, parentAssignmentEmails, careersEmail };
     const query = school.id ? `?id=eq.${encodeURIComponent(school.id)}` : "";
     const response = await fetch(`${base}/rest/v1/school_settings${query}`, {
       method: "PATCH",
@@ -2149,7 +2158,7 @@ function materialsView() {
 
 function appShell() {
   if (state.authMode === "checking") return authLoadingScreen();
-  if (state.authMode === "marketing") return marketingScreen();
+  if (state.authMode === "marketing") return state.opportunityDetail ? opportunityDetailScreen(state.opportunityDetail) : marketingScreen();
   if (state.authMode === "not-configured") return notConfiguredScreen();
   if (state.authMode === "signed-out") return loginScreen();
   if (state.authMode === "force-password") return forcePasswordScreen();
@@ -2302,6 +2311,55 @@ function socialLinksHtml() {
   `;
 }
 
+// An opportunity's own page — reached by clicking "View details & apply"
+// on a Work With Us card, or a direct link (see applyOpportunityHash()).
+// Shows the full posting and where to send a CV and cover letter.
+function opportunityDetailScreen(op) {
+  const careersEmail = (school.settings.careersEmail || "").trim();
+  const mailSubject = encodeURIComponent(`Application: ${op.title}`);
+  const mailBody = encodeURIComponent(
+    `Hi ${school.name} team,\n\nI'd like to apply for the ${op.title} position. My CV and cover letter are attached.\n\nThanks,\n`,
+  );
+  return `
+    <div class="marketing">
+      <header class="m-nav">
+        <div class="brand">
+          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+          <strong>${escapeHtml(school.name)}</strong>
+        </div>
+        <div class="m-nav-social">${socialLinksHtml()}</div>
+        <button class="m-login-button" onclick="beginLogin()">Login</button>
+      </header>
+
+      <section class="m-section reveal">
+        <button type="button" class="auth-back" onclick="closeOpportunityDetail()">&larr; Back to Work With Us</button>
+        <p class="eyebrow">Open position</p>
+        <h1>${escapeHtml(op.title)}</h1>
+        <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || "Details on request"}</p>
+
+        <div class="panel">
+          ${op.description ? `<p>${escapeHtml(op.description)}</p>` : `<p class="empty">No further details posted yet — reach out and ask.</p>`}
+        </div>
+
+        <div class="panel">
+          <h2>How to apply</h2>
+          ${
+            careersEmail
+              ? `<p>Send your CV and a short cover letter to <a href="mailto:${escapeHtml(careersEmail)}?subject=${mailSubject}&body=${mailBody}">${escapeHtml(careersEmail)}</a> — mention "${escapeHtml(op.title)}" in the subject line.</p>`
+              : `<p>We haven't set up an application email yet — use the <a href="#contact" onclick="closeOpportunityDetail()">contact form</a> and mention you're applying for "${escapeHtml(op.title)}".</p>`
+          }
+        </div>
+      </section>
+
+      <footer class="m-footer">
+        <span>&copy; ${new Date().getFullYear()} ${escapeHtml(school.name)}</span>
+        <div class="m-footer-social">${socialLinksHtml()}</div>
+        <button class="m-login-button" onclick="beginLogin()">Login</button>
+      </footer>
+    </div>
+  `;
+}
+
 function marketingScreen() {
   const notice = state.contactNotice;
   const reviewNotice = state.reviewNotice;
@@ -2324,7 +2382,7 @@ function marketingScreen() {
       <header class="m-nav">
         <div class="brand">
           <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-          <strong>${school.name}</strong>
+          <strong>${escapeHtml(school.name)}</strong>
         </div>
         <nav class="m-nav-links" aria-label="Marketing navigation">
           <a href="#how">How it works</a>
@@ -2431,7 +2489,7 @@ function marketingScreen() {
 
       <section id="careers" class="m-section reveal">
         <h2>Work With Us</h2>
-        <p class="m-sub">${school.name} is growing — here's what we're hiring for right now.</p>
+        <p class="m-sub">${escapeHtml(school.name)} is growing — here's what we're hiring for right now.</p>
         <div class="m-cards">
           ${
             state.publicOpportunities.length
@@ -2441,7 +2499,8 @@ function marketingScreen() {
               <article class="m-card reveal">
                 <h3>${escapeHtml(op.title)}</h3>
                 <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || "Details on request"}</p>
-                ${op.description ? `<p>${escapeHtml(op.description)}</p>` : ""}
+                ${op.description ? `<p>${escapeHtml(op.description.length > 160 ? `${op.description.slice(0, 160)}…` : op.description)}</p>` : ""}
+                <button type="button" class="m-cta-secondary" onclick="openOpportunityDetail('${escapeJs(op.id)}')">View details &amp; apply</button>
               </article>
             `,
                   )
@@ -2472,7 +2531,7 @@ function marketingScreen() {
       </section>
 
       <footer class="m-footer">
-        <span>&copy; ${new Date().getFullYear()} ${school.name}</span>
+        <span>&copy; ${new Date().getFullYear()} ${escapeHtml(school.name)}</span>
         <div class="m-footer-social">${socialLinksHtml()}</div>
         <button class="m-login-button" onclick="beginLogin()">Login</button>
       </footer>
@@ -2511,6 +2570,36 @@ function backToMarketing() {
   state.authMode = "marketing";
   state.authError = "";
   render();
+}
+
+// Opens an opportunity's own page (still within the marketing/signed-out
+// flow — see appShell()) with its full description and how to apply.
+// Updates the URL hash so the page is directly linkable/shareable and
+// survives a refresh (see applyOpportunityHash(), called from initApp()).
+function openOpportunityDetail(id) {
+  const opportunity = state.publicOpportunities.find((op) => op.id === id);
+  if (!opportunity) return;
+  state.opportunityDetail = opportunity;
+  window.location.hash = `opportunity-${id}`;
+  window.scrollTo(0, 0);
+  render();
+}
+
+function closeOpportunityDetail() {
+  state.opportunityDetail = null;
+  window.location.hash = "careers";
+  render();
+}
+
+// Called once on load, after the public opportunities list has loaded —
+// if the URL already points at one (someone followed a shared link, or
+// refreshed the page while viewing one), open it immediately instead of
+// showing the general homepage first.
+function applyOpportunityHash() {
+  const match = /^#opportunity-(.+)$/.exec(window.location.hash);
+  if (!match) return;
+  const opportunity = state.publicOpportunities.find((op) => op.id === decodeURIComponent(match[1]));
+  if (opportunity) state.opportunityDetail = opportunity;
 }
 
 async function handleContactSubmit(event) {
@@ -3515,6 +3604,8 @@ window.handleAddOpportunity = handleAddOpportunity;
 window.setOpportunityStatus = setOpportunityStatus;
 window.removeOpportunity = removeOpportunity;
 window.dismissOpportunitiesNotice = dismissOpportunitiesNotice;
+window.openOpportunityDetail = openOpportunityDetail;
+window.closeOpportunityDetail = closeOpportunityDetail;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -3543,6 +3634,7 @@ async function initApp() {
     if (state.authMode === "marketing") render();
   });
   loadPublicOpportunities().then(() => {
+    applyOpportunityHash();
     if (state.authMode === "marketing") render();
   });
 

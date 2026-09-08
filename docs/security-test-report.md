@@ -6,7 +6,52 @@ Date: 2026-09-08
 
 Passed: 26 / 26 automated tests.
 
-## Latest Update: Full Button/Logic Audit, Two New Manager Features, and a Stored-XSS Fix
+## Latest Update: Opportunity Detail Pages, and Two More Unescaped Fields Found
+
+The Manager asked for one more thing on top of Work With Us: clicking an
+opportunity should open its own page with the full description and an
+email to send a CV and cover letter to — rather than a card on the
+homepage being the whole experience.
+
+**Added:** `opportunityDetailScreen()`, a real page of its own reached
+by clicking **View details & apply** on any Work With Us card. It lives
+inside the existing marketing/signed-out flow (`appShell()` swaps to it
+whenever `state.opportunityDetail` is set) and gets its own URL —
+`#opportunity-<id>` — set by `openOpportunityDetail()` and read back by
+a new `applyOpportunityHash()` on load, so a shared link or a page
+refresh lands directly on the right posting instead of the general
+homepage. Its "How to apply" section is a `mailto:` link, pre-filled
+with a subject line naming the role, pointed at a new **Careers email**
+field (**Settings → Work With Us**). That field lives on the existing
+`school_settings.settings` jsonb column, so no new migration was
+needed for it — it's just a new key in an object that already stores
+arbitrary settings. Until a Careers email is set, the page points
+applicants at the existing Contact form instead (with a note on which
+role to mention), rather than a broken or missing "how to apply"
+section.
+
+**Also found while touching this: two more places doing the same
+`String(value)`-without-escaping thing this file's previous entry
+fixed everywhere else.** The marketing page's own header/footer school
+name (`${school.name}` in three places: the nav brand, the footer, and
+the same in the new detail page) and the Settings form's `value="..."`
+attributes (school name, portal URL) were still interpolated raw. A
+malicious school name is a much narrower attack surface than the
+public review/contact forms this file already covers — it takes a
+Manager account, or write access to `school_settings`, to set one — but
+since it's now rendered on the public-facing homepage that a
+`Manager` account controls, and since it's cheap to fix while already
+editing these exact functions, both were switched to `escapeHtml()` too
+rather than left as an inconsistency.
+
+Re-verified: `node --check src/app.js`, `npm test` (26/26 — this
+change touches only rendering and a settings field name, not
+`security.js` or any RLS policy, so no test additions were needed),
+`npm run build`. Manually re-traced every `onclick`/button added in
+this change against the file's `window.*` exports (same script as the
+previous audit) — no orphans.
+
+## Earlier Update: Full Button/Logic Audit, Two New Manager Features, and a Stored-XSS Fix
 
 The Manager asked for three things: (1) test every tab, button, and
 piece of logic across the dashboard; (2) a "Work With Us" section where

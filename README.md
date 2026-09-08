@@ -203,9 +203,19 @@ posts a job opening (title, location, type, description) that appears
 immediately on the public marketing homepage's **Work With Us** section
 — visible to every visitor, signed in or not. Each posting can be
 **Closed** (hidden from the public page, kept in the list for later) or
-**Reopened**, and **Remove** deletes it outright. A visitor interested in
-an open role is pointed at the existing Contact form rather than a
-separate application pipeline.
+**Reopened**, and **Remove** deletes it outright.
+
+Clicking **View details & apply** on a posting opens that opportunity's
+own page — its own URL (`#opportunity-<id>`, so it can be copied and
+shared directly, and survives a page refresh), with the full
+description and a **How to apply** section. That section shows a
+`mailto:` link, pre-filled with a subject line naming the role, to
+whatever address is set as **Careers email** in **Settings → Work With
+Us**. Until a Careers email is set, applicants are pointed at the
+existing Contact form instead, with a note to mention which role
+they're applying for — there's no separate résumé/application upload
+pipeline, on purpose, so every inquiry lands in the one Contact
+Requests panel a Manager already checks.
 
 ## Sidebar Tabs — What's Here and Why (as of 2026-09-08)
 
