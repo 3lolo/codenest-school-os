@@ -22,18 +22,32 @@ actually shipped today is the vanilla-JS + Supabase app described in the
 Materials, and Group-Scoped Assignments", "Attendance and Staff
 Requests", "Marketing Homepage").
 
-As of 2026-09-06 the shipped app's sidebar has 13 tabs: Dashboard,
+As of 2026-09-08 the shipped app's sidebar has 14 tabs: Dashboard,
 Instructors, Students, Classes, Assignments, Attendance, Requests
 (Staff Requests), Reports, Materials, Accounts & Logins, Contact
-Requests, Reviews, and Settings. Four tabs that once existed in the
-UI — Families, Messages/Communications, Notifications, and an Audit
-Log — were removed: none of them had a working button or a backing
-table anywhere in the shipped schema, confirmed by grepping the full
-codebase. See `docs/security-test-report.md` for details. This
-document's Notification Architecture / families / audit-log sections
-below are kept as design notes for if those get built for real later —
-they are not a description of removed functionality regressing, since
-none of it was ever implemented in the first place.
+Requests, Reviews, Work With Us (Opportunities), and Settings. Four
+tabs that once existed in the UI — Families, Messages/Communications,
+Notifications, and an Audit Log — were removed: none of them had a
+working button or a backing table anywhere in the shipped schema,
+confirmed by grepping the full codebase. See
+`docs/security-test-report.md` for details. This document's
+Notification Architecture / families / audit-log sections below are
+kept as design notes for if those get built for real later — they are
+not a description of removed functionality regressing, since none of
+it was ever implemented in the first place.
+
+Two features live only in the "shipped" half of this document, added
+in `0009_opportunities_and_removal_requests.sql`:
+
+- **Opportunities (Work With Us)**: `public.opportunities`, Manager
+  write, anyone-read-if-open. Powers a public section on the marketing
+  homepage. See "Opportunities (Work With Us)" below.
+- **Removal and removal requests**: a Manager can delete an Instructor
+  or Student record and login outright, via `api/remove-account.js`.
+  An Instructor cannot — they submit a `staff_requests` row of kind
+  `removal`, scoped by RLS to a student in one of their own classes,
+  which a Manager approves from the Requests panel. See "Removal and
+  Removal Requests" below.
 
 ## Application Domains
 
@@ -176,6 +190,50 @@ Added in `supabase/migrations/0007_staff_requests_attendance.sql`:
   policy at all, so a sent request can't be edited or its decision
   overwritten after the fact.
 
+### Removal and Removal Requests
+
+Added in `supabase/migrations/0009_opportunities_and_removal_requests.sql`,
+on top of the "students write admin" / "instructors admin write" RLS
+policies `0002_production_rls.sql` already granted a Manager (those
+already covered plain `DELETE` at the database level — this migration
+adds nothing new there):
+
+- **Direct removal** (`instructorsView()` / `studentProfile()` in
+  `src/app.js`, both gated by `canRemoveAccounts()` in `src/security.js`,
+  Manager-only): calls `api/remove-account.js`, which re-verifies the
+  caller is a Manager server-side with the `service_role` key — the same
+  rule `api/create-account.js` follows for issuing logins, never trusting
+  a role claimed by the browser — then deletes the person's auth user (if
+  a login was ever issued; this cascades to their `user_profiles` row)
+  and their `students`/`instructors` row, in that order. Removing an
+  Instructor is blocked with a 409 if `classes.instructor` still
+  references them, since that's a plain text match rather than a real
+  foreign key and the database wouldn't otherwise stop it. Removing a
+  Student needs no such guardrail: `attendance_records`,
+  `group_members`, and `parent_student_links` all reference
+  `students.student_id` with `on delete cascade`, verified against a
+  real local Postgres instance (seed a student with an attendance
+  record, a group membership, and a parent link, delete the student as
+  an authenticated Manager, confirm all three are gone).
+- **Removal requests** (`staff_requests.kind = 'removal'`): an
+  Instructor cannot delete a student directly — RLS grants them no
+  `DELETE` policy on `students` at all — so they submit a `staff_requests`
+  row carrying `target_student_id`/`target_student_name` (plain text
+  snapshots, not real foreign keys, for the same reason
+  `instructor_name` elsewhere in this table isn't one: the request is a
+  historical record that should survive the student row it named being
+  deleted, not disappear or block the deletion). The insert policy
+  additionally requires, when `kind = 'removal'`, that the named student
+  actually belongs to a class taught by the requesting instructor —
+  verified against a real Postgres instance: a same-class removal
+  request succeeds, a request naming a different instructor's student is
+  rejected by RLS before it ever reaches the table. Approving one (from
+  `staffRequestRow()`'s "Approve & remove" button, still the Manager's
+  own session) calls `api/remove-account.js` exactly as a direct removal
+  would, then marks the request `approved` only if that removal actually
+  succeeded — a failed removal leaves the request `pending` rather than
+  silently marking it decided.
+
 ## Marketing Homepage
 
 `src/app.js` renders a public marketing screen (`marketingScreen()`) as
@@ -211,6 +269,17 @@ internal operations side, not the homepage's sales pitch. It covers:
   (`reviewsView()` / `setReviewStatus()`), gated by `public.is_admin()`;
   only `status = 'approved'` rows are ever publicly readable
   (`loadPublicReviews()`).
+- A **Work With Us** section (`state.publicOpportunities`, loaded by
+  `loadPublicOpportunities()`) that lists every `public.opportunities`
+  row with `status = 'open'`, readable by anyone under RLS (no anon key
+  even required to be signed in for). Managers post and remove openings
+  from the in-app **Work With Us** panel (`opportunitiesView()`), gated
+  by `public.is_admin()` the same way Reviews is — `for all`, not just
+  update, since a Manager can delete a posting outright, not only change
+  its status. There's no separate application table: an interested
+  visitor is pointed at the existing Contact form (`#contact`), so an
+  application lands in the same **Contact Requests** panel every other
+  inquiry does.
 - Facebook and WhatsApp links (`socialLinksHtml()`, driven by
   `school.social.facebook` / `school.social.whatsapp`) shown in the nav,
   the contact section, and the footer.

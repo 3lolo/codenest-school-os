@@ -16,14 +16,20 @@ something sold to other schools:
   operations. Creates Manager, Instructor, and Student accounts, adds new
   instructor and student profiles (not just logins for existing ones),
   manages classes, groups, materials, assignments, reports, settings,
-  incoming Contact Requests, and Reviews. A Manager-issued "Manager"
-  login is always the `School Admin` role under the hood — nobody can
-  self-service a second `Super Admin` from the UI or the API.
+  incoming Contact Requests, Reviews, and Work With Us opportunities. A
+  Manager-issued "Manager" login is always the `School Admin` role under
+  the hood — nobody can self-service a second `Super Admin` from the UI
+  or the API. A Manager can also permanently **remove** any Instructor or
+  Student — this deletes both their school record and their portal login
+  in one step (see "Removing an Instructor or Student" below).
 - **Instructor** — manages their assigned classes: can create new classes
   (self-assigned), create new Student profiles and issue their logins
   (only for students in their own classes), split a class into Groups,
   upload Materials for a class or a specific group, and create
-  Assignments (optionally scoped to one group).
+  Assignments (optionally scoped to one group). An Instructor cannot
+  delete a student directly — they can **request** one be removed from
+  the Requests tab, scoped to a student in one of their own classes, for
+  a Manager to decide on.
 - **Student** — signs in to see their own assignments, attendance,
   grades, and any Materials shared with their class or their group.
 
@@ -153,23 +159,62 @@ at-risk students at a glance.
 Instructors only see classes and log entries for their own classes;
 Managers see everything.
 
-## Staff Requests — Instructors Messaging Managers (needs migration `0007`)
+## Staff Requests — Instructors Messaging Managers (needs migration `0007`; removal requests need `0009`)
 
 **Requests** in the sidebar: an Instructor's **New request** button
-sends either a quick **Message** or a **Time off request** (with start/
-end dates) straight to every Manager. Managers see every request here
-with **Approve** / **Deny** / **Mark read** actions; an Instructor sees
-only their own requests and the status a Manager gave them — they can
-send a new one but can't edit or delete a sent request, so it stays a
-reliable record of what was actually asked and decided.
+sends a quick **Message**, a **Time off request** (with start/end
+dates), or a **Student removal** request (pick a student from a
+dropdown scoped to the instructor's own classes) straight to every
+Manager. Managers see every request here with **Approve** / **Deny** /
+**Mark read** actions — for a removal request, **Approve** is labeled
+**Approve & remove** and actually deletes the student's record and
+login in the same click (see "Removing an Instructor or Student"
+below); denying or marking it read does nothing to the student. An
+Instructor sees only their own requests and the status a Manager gave
+them — they can send a new one but can't edit or delete a sent request,
+so it stays a reliable record of what was actually asked and decided.
 
-## Sidebar Tabs — What's Here and Why (as of 2026-09-06)
+## Removing an Instructor or Student (needs migration `0009`)
 
-The sidebar currently has 13 tabs, all of them backed by a real table and
-a real write path: **Dashboard, Instructors, Students, Classes,
+A Manager can permanently remove any Instructor (from the **Remove**
+button on the Instructors tab) or Student (from the **Remove student**
+button on that student's profile panel on the Students tab). Both go
+through `api/remove-account.js`, a server endpoint that re-verifies the
+caller is actually a Manager before doing anything — the same rule
+`api/create-account.js` already follows for issuing logins — and does
+two things in one step: deletes the person's portal login, if one was
+ever issued, and deletes their school record. Everything that pointed at
+that record (attendance, group membership, a linked parent account) is
+cleaned up automatically by the database.
+
+An Instructor never gets a Remove button anywhere — the only path for
+them is the removal *request* described above, and even an approved
+request is carried out under the Manager's own session, never the
+requesting instructor's.
+
+Removing an Instructor who still has classes assigned is blocked with a
+clear message asking the Manager to reassign or delete those classes
+first, rather than silently leaving classes pointing at nobody.
+
+## Work With Us — Opportunities (needs migration `0009`)
+
+**Work With Us** in the sidebar (Manager only): **Add opportunity**
+posts a job opening (title, location, type, description) that appears
+immediately on the public marketing homepage's **Work With Us** section
+— visible to every visitor, signed in or not. Each posting can be
+**Closed** (hidden from the public page, kept in the list for later) or
+**Reopened**, and **Remove** deletes it outright. A visitor interested in
+an open role is pointed at the existing Contact form rather than a
+separate application pipeline.
+
+## Sidebar Tabs — What's Here and Why (as of 2026-09-08)
+
+The sidebar currently has 14 tabs, all of them backed by a real table
+and a real write path: **Dashboard, Instructors, Students, Classes,
 Assignments, Attendance, Requests, Reports, Materials, Accounts &
-Logins, Contact Requests, Reviews, Settings** (Settings is Manager-only;
-see "Account Types" above for what each role can see).
+Logins, Contact Requests, Reviews, Work With Us, Settings** (Work With
+Us and Settings are Manager-only; see "Account Types" above for what
+each role can see).
 
 Four tabs that used to exist here — **Families**, **Messages**, **Notifications**,
 and **Audit Log** — were removed after a full-codebase check found none
@@ -205,9 +250,10 @@ npm run build
 `npm run build` produces a static site in `dist/`. Serving `dist/` with
 `npm run preview` (or any static file server) is fine for browsing the UI,
 but the "Generate login" / "Reset password" actions in Accounts & Logins
-call a Vercel serverless function (`/api/create-account.js`) that a plain
-static server cannot run. Use `vercel dev` locally, or the deployed Vercel
-URL, to exercise that flow end to end.
+and the "Remove" actions on Instructors/Students call Vercel serverless
+functions (`/api/create-account.js`, `/api/remove-account.js`) that a
+plain static server cannot run. Use `vercel dev` locally, or the deployed
+Vercel URL, to exercise those flows end to end.
 
 ## Supabase
 
@@ -244,6 +290,12 @@ For real school data with real logins, also run, in order:
    you already ran an earlier copy of this same file. If you're setting
    up a brand-new project today, the current `0006` already has this fix
    baked in, so running `0008` afterward is a no-op but still safe.
+10. `supabase/migrations/0009_opportunities_and_removal_requests.sql` —
+    adds the `opportunities` table (Work With Us) and extends
+    `staff_requests` with the "removal" kind (see "Removing an
+    Instructor or Student" and "Work With Us" above). Safe to run any
+    time after `0007`; everything already using this app keeps working
+    without it, it just won't have these two features yet.
 
 Then follow "Bootstrap the first admin" in `docs/deploy-vercel-supabase.md`
 so someone can sign in and start issuing Instructor/Student credentials.
@@ -283,8 +335,10 @@ Set these environment variables:
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY` — **server-only**, used exclusively by
-  `/api/create-account.js` to create and reset logins. Never expose this
-  key to the browser or add it to `src/config.js`.
+  `/api/create-account.js` (create and reset logins) and
+  `/api/remove-account.js` (remove an instructor or student and revoke
+  their login). Never expose this key to the browser or add it to
+  `src/config.js`.
 
 Vercel settings:
 

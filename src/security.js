@@ -13,8 +13,8 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "settings"],
-  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews"],
+  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings"],
+  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities"],
   Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "accounts"],
   Student: ["dashboard", "assignments", "materials", "attendance"],
   Parent: ["dashboard", "students", "assignments", "materials", "attendance"],
@@ -50,6 +50,24 @@ export function canCreateClasses(role) {
 
 export function canCreateStudentProfiles(role) {
   return ["Super Admin", "School Admin", "Instructor"].includes(role);
+}
+
+// Only a Manager can permanently remove an Instructor or Student record
+// (and their login) outright. An Instructor never gets this — they can
+// only *request* a student's removal from Requests, scoped to their own
+// classes, for a Manager to decide on (see the "removal" staff_requests
+// kind and api/remove-account.js, which re-checks this same rule
+// server-side before ever touching the database).
+export function canRemoveAccounts(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+// Opportunities ("Work With Us"): only a Manager posts or removes a job
+// opening. The public listing on the marketing homepage needs no signed-in
+// viewer at all — that's enforced by Supabase RLS (status = 'open' is
+// readable by anyone), not by this permission.
+export function canManageOpportunities(role) {
+  return ["Super Admin", "School Admin"].includes(role);
 }
 
 export function canAccessModule(role, moduleId) {

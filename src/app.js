@@ -3,6 +3,8 @@ import {
   canCreateClasses,
   canCreateInstructorProfiles,
   canCreateStudentProfiles,
+  canManageOpportunities,
+  canRemoveAccounts,
   filterStudentsForViewer,
   roleLabel,
   safeSearchRowsForViewer,
@@ -47,9 +49,14 @@ const state = {
   selectedStudentId: null,
   studentClassFilter: "",
   staffRequestBusy: null,
+  staffRequestNotice: null,
   settingsBusy: false,
   settingsError: "",
   settingsNotice: "",
+  publicOpportunities: [],
+  opportunitiesDirectory: null,
+  opportunitiesBusy: null,
+  opportunitiesNotice: null,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -72,6 +79,7 @@ const navItems = [
   ["accounts", "Accounts & Logins", "key"],
   ["leads", "Contact Requests", "message"],
   ["reviews", "Reviews", "chart"],
+  ["opportunities", "Work With Us", "briefcase"],
   ["settings", "Settings", "gear"],
 ];
 
@@ -122,6 +130,7 @@ const icons = {
   shield: "◇",
   key: "⚷",
   folder: "▧",
+  briefcase: "▣",
 };
 
 function can(view) {
@@ -140,6 +149,9 @@ function navigate(view) {
   }
   if (view === "reviews" && ["Super Admin", "School Admin"].includes(state.role)) {
     loadReviewsDirectory().then(renderContentOnly);
+  }
+  if (view === "opportunities" && canManageOpportunities(state.role)) {
+    loadOpportunitiesDirectory().then(renderContentOnly);
   }
 }
 
@@ -236,6 +248,7 @@ function titleForView() {
     accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
     leads: "Contact Requests",
     reviews: "Reviews",
+    opportunities: "Work With Us",
     settings: "School Settings",
   }[state.view];
 }
@@ -255,6 +268,7 @@ function content() {
     accounts: accountsView(),
     leads: leadsView(),
     reviews: reviewsView(),
+    opportunities: opportunitiesView(),
     settings: settingsView(),
   }[state.view] || dashboard();
 }
@@ -521,21 +535,48 @@ function studentProfile(student) {
   const studentGroups = groups.filter((group) =>
     groupMembers.some((member) => member.groupId === group.id && member.studentId === student.id),
   );
+  const canRemove = canRemoveAccounts(state.role);
+  const removeKey = `remove-student-${student.id}`;
+  const removeBusy = state.accountsBusy === removeKey;
   return `
     <section class="panel profile">
-      <div class="profile-hero compact"><div class="avatar">${student.first[0]}${student.last[0]}</div><div><h2>${fullName(student)}</h2><span>${student.id} · ${student.status}</span></div></div>
+      <div class="profile-hero compact"><div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div><div><h2>${escapeHtml(fullName(student))}</h2><span>${escapeHtml(student.id)} · ${escapeHtml(student.status)}</span></div></div>
       <dl>
-        <div><dt>Email</dt><dd>${student.email}</dd></div>
-        <div><dt>Phone</dt><dd>${student.phone || "—"}</dd></div>
-        <div><dt>Class</dt><dd>${className(student.classId)}</dd></div>
-        <div><dt>Group(s)</dt><dd>${studentGroups.length ? studentGroups.map((g) => g.name).join(", ") : "—"}</dd></div>
-        <div><dt>Family</dt><dd>${student.family || "—"}</dd></div>
-        <div><dt>Parent</dt><dd>${student.parent || "—"}</dd></div>
-        <div><dt>Level</dt><dd>${student.level || "—"}</dd></div>
-        <div><dt>Notes</dt><dd>${student.notes || "—"}</dd></div>
+        <div><dt>Email</dt><dd>${escapeHtml(student.email)}</dd></div>
+        <div><dt>Phone</dt><dd>${escapeHtml(student.phone) || "—"}</dd></div>
+        <div><dt>Class</dt><dd>${escapeHtml(className(student.classId))}</dd></div>
+        <div><dt>Group(s)</dt><dd>${studentGroups.length ? studentGroups.map((g) => escapeHtml(g.name)).join(", ") : "—"}</dd></div>
+        <div><dt>Family</dt><dd>${escapeHtml(student.family) || "—"}</dd></div>
+        <div><dt>Parent</dt><dd>${escapeHtml(student.parent) || "—"}</dd></div>
+        <div><dt>Level</dt><dd>${escapeHtml(student.level) || "—"}</dd></div>
+        <div><dt>Notes</dt><dd>${escapeHtml(student.notes) || "—"}</dd></div>
       </dl>
+      ${canRemove ? `<div class="toolbar"><button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? "Removing…" : "Remove student"}</button></div>` : ""}
     </section>
   `;
+}
+
+// Manager-only, direct removal — deletes the student's record and login
+// (if one was issued) via api/remove-account.js. An Instructor never gets
+// this button; they can only request a removal from the Requests tab (see
+// addStaffRequestModal), which a Manager approves through the same API.
+async function handleRemoveStudent(id, name) {
+  if (!window.confirm(`Remove ${name}? This deletes their student record and login. This can't be undone.`)) return;
+  const key = `remove-student-${id}`;
+  state.accountsBusy = key;
+  state.accountsNotice = null;
+  renderContentOnly();
+  try {
+    await removeAccountApi({ role: "Student", ref: id });
+    if (state.selectedStudentId === id) state.selectedStudentId = null;
+    await refreshAfterWrite();
+    state.accountsNotice = { type: "removed", message: `${name} was removed.` };
+  } catch (error) {
+    state.accountsNotice = { type: "error", message: error.message };
+  } finally {
+    state.accountsBusy = null;
+    renderContentOnly();
+  }
 }
 
 function className(id) {
@@ -580,7 +621,7 @@ function assignmentsView() {
 function assignmentPanel() {
   return `
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Assignments</h2><button>View submissions</button></div>
+      <div class="panel-head"><h2>Assignments</h2><span>${assignments.length} total</span></div>
       <table>
         <thead><tr><th>Assignment</th><th>Class</th><th>Due</th><th>Completion</th><th>Status</th></tr></thead>
         <tbody>
@@ -1027,6 +1068,8 @@ async function loadFromSupabase(token) {
             message: request.message,
             startDate: request.start_date,
             endDate: request.end_date,
+            targetStudentId: request.target_student_id,
+            targetStudentName: request.target_student_name,
             status: request.status,
             createdAt: request.created_at,
           }))
@@ -1167,6 +1210,8 @@ function modalBody(modal) {
       return addAttendanceModal();
     case "addStaffRequest":
       return addStaffRequestModal();
+    case "addOpportunity":
+      return addOpportunityModal();
     default:
       return "";
   }
@@ -1500,17 +1545,31 @@ async function handleTakeAttendance(event) {
 }
 
 function addStaffRequestModal() {
+  const ownStudents = filterStudentsForViewer(currentViewer(), people.students);
+  const studentOptions = ownStudents
+    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(fullName(s))} · ${escapeHtml(className(s.classId))}</option>`)
+    .join("");
   return `
     <h2>New request to Managers</h2>
-    <p class="hint">Send a quick message, or request time off — a Manager will see this in their Requests panel.</p>
+    <p class="hint">Send a quick message, request time off, or ask a Manager to remove a student from one of your own classes — a Manager decides every request from their Requests panel.</p>
     ${modalMessages()}
     <form onsubmit="handleAddStaffRequest(event)">
       <label>Type
-        <select name="kind" onchange="toggleStaffRequestDates(this.value)">
+        <select name="kind" onchange="toggleStaffRequestFields(this.value)">
           <option value="message">Message</option>
           <option value="holiday">Time off request</option>
+          <option value="removal">Student removal</option>
         </select>
       </label>
+      <div id="staff-request-student" hidden>
+        <label>Student
+          <select name="studentRef">
+            <option value="">Select a student…</option>
+            ${studentOptions}
+          </select>
+        </label>
+        ${ownStudents.length === 0 ? `<p class="hint">You don't have any students in your own classes yet.</p>` : ""}
+      </div>
       <label>Subject<input type="text" name="subject" required /></label>
       <label>Details<textarea name="message" rows="3"></textarea></label>
       <div id="staff-request-dates" hidden>
@@ -1524,9 +1583,11 @@ function addStaffRequestModal() {
   `;
 }
 
-function toggleStaffRequestDates(kind) {
-  const container = document.getElementById("staff-request-dates");
-  if (container) container.hidden = kind !== "holiday";
+function toggleStaffRequestFields(kind) {
+  const datesContainer = document.getElementById("staff-request-dates");
+  if (datesContainer) datesContainer.hidden = kind !== "holiday";
+  const studentContainer = document.getElementById("staff-request-student");
+  if (studentContainer) studentContainer.hidden = kind !== "removal";
 }
 
 async function handleAddStaffRequest(event) {
@@ -1537,6 +1598,7 @@ async function handleAddStaffRequest(event) {
   const message = form.message.value.trim();
   const startDate = form.startDate.value || null;
   const endDate = form.endDate.value || null;
+  const studentRef = form.studentRef ? form.studentRef.value : "";
   const instructorName = state.viewerContext?.instructorName;
   if (!subject) {
     state.modalError = "Please add a subject.";
@@ -1547,6 +1609,23 @@ async function handleAddStaffRequest(event) {
     state.modalError = "Your account isn't linked to an instructor record yet. Ask a Manager to fix this.";
     render();
     return;
+  }
+  let targetStudentId = null;
+  let targetStudentName = null;
+  if (kind === "removal") {
+    if (!studentRef) {
+      state.modalError = "Choose which student you're requesting to remove.";
+      render();
+      return;
+    }
+    const targetStudent = filterStudentsForViewer(currentViewer(), people.students).find((s) => s.id === studentRef);
+    if (!targetStudent) {
+      state.modalError = "That student isn't in one of your own classes.";
+      render();
+      return;
+    }
+    targetStudentId = targetStudent.id;
+    targetStudentName = fullName(targetStudent);
   }
   state.modalBusy = true;
   state.modalError = "";
@@ -1560,6 +1639,8 @@ async function handleAddStaffRequest(event) {
         message: message || null,
         start_date: kind === "holiday" ? startDate : null,
         end_date: kind === "holiday" ? endDate : null,
+        target_student_id: targetStudentId,
+        target_student_name: targetStudentName,
       },
     ]);
     await refreshAfterWrite();
@@ -1567,7 +1648,7 @@ async function handleAddStaffRequest(event) {
     navigate("staffRequests");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not send this. Has migration 0007 been run yet?";
+    state.modalError = error.message || "Could not send this. Has migration 0009 been run yet?";
     render();
   }
 }
@@ -1577,6 +1658,7 @@ function staffRequestsView() {
   const rows = isManager ? staffRequests : staffRequests.filter((r) => r.instructorName === state.viewerContext?.instructorName);
 
   return `
+    ${state.staffRequestNotice ? `<p class="notice-row ${state.staffRequestNotice.type === "error" ? "auth-error" : "m-success"}">${escapeHtml(state.staffRequestNotice.message)}<button type="button" class="notice-dismiss" onclick="dismissStaffRequestNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
     <div class="toolbar">${!isManager ? `<button onclick="openModal('addStaffRequest')">New request</button>` : ""}</div>
     <section class="panel table-panel">
       <div class="panel-head"><h2>${isManager ? "Staff Requests" : "Your Requests"}</h2><span>${rows.length} total</span></div>
@@ -1595,21 +1677,26 @@ function staffRequestsView() {
 
 function staffRequestRow(request, isManager) {
   const busy = state.staffRequestBusy === request.id;
-  const details =
-    request.kind === "holiday"
-      ? `${request.startDate || "?"} → ${request.endDate || "?"}${request.message ? ` · ${request.message}` : ""}`
-      : request.message || "—";
+  const isRemoval = request.kind === "removal";
+  const details = isRemoval
+    ? `Remove ${escapeHtml(request.targetStudentName || request.targetStudentId || "student")}${request.message ? ` · ${escapeHtml(request.message)}` : ""}`
+    : request.kind === "holiday"
+      ? `${request.startDate || "?"} → ${request.endDate || "?"}${request.message ? ` · ${escapeHtml(request.message)}` : ""}`
+      : escapeHtml(request.message) || "—";
+  const kindLabel = isRemoval ? "Student removal" : request.kind === "holiday" ? "Time off" : "Message";
+  const approveHandler = isRemoval ? `approveRemovalRequest('${request.id}')` : `setStaffRequestStatus('${request.id}', 'approved')`;
+  const approveLabel = busy ? "Working…" : isRemoval ? "Approve & remove" : "Approve";
   return `
     <tr>
-      ${isManager ? `<td>${request.instructorName}</td>` : ""}
-      <td>${badge(request.kind === "holiday" ? "Time off" : "Message")}</td>
-      <td><strong>${request.subject}</strong></td>
+      ${isManager ? `<td>${escapeHtml(request.instructorName)}</td>` : ""}
+      <td>${badge(kindLabel)}</td>
+      <td><strong>${escapeHtml(request.subject)}</strong></td>
       <td>${details}</td>
       <td>${badge(request.status.charAt(0).toUpperCase() + request.status.slice(1))}</td>
       ${
         isManager
           ? `<td>
-              <button onclick="setStaffRequestStatus('${request.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Approve"}</button>
+              <button onclick="${approveHandler}" ${busy ? "disabled" : ""}>${approveLabel}</button>
               <button onclick="setStaffRequestStatus('${request.id}', 'denied')" ${busy ? "disabled" : ""}>Deny</button>
               <button onclick="setStaffRequestStatus('${request.id}', 'read')" ${busy ? "disabled" : ""}>Mark read</button>
             </td>`
@@ -1642,7 +1729,45 @@ async function setStaffRequestStatus(id, status) {
   }
 }
 
+// Approving a "removal" request does two things: actually remove the
+// student (their record and login, via api/remove-account.js — always run
+// as the Manager's own session, never the requesting instructor's), then
+// mark the request approved the same way any other request is decided.
+// If the removal itself fails (e.g. the student was already removed a
+// different way), the request is left exactly as it was — status is never
+// flipped to "approved" for a removal that didn't actually happen.
+async function approveRemovalRequest(id) {
+  const request = staffRequests.find((r) => r.id === id);
+  if (!request) return;
+  await handleApproveRemovalRequest(request);
+}
+
+async function handleApproveRemovalRequest(request) {
+  if (!state.session) return;
+  const label = request.targetStudentName || request.targetStudentId || "this student";
+  if (!window.confirm(`Remove ${label}? This deletes their student record and login. This can't be undone.`)) return;
+  state.staffRequestBusy = request.id;
+  state.staffRequestNotice = null;
+  renderContentOnly();
+  try {
+    await removeAccountApi({ role: "Student", ref: request.targetStudentId });
+    await setStaffRequestStatus(request.id, "approved");
+    state.staffRequestNotice = { type: "success", message: `${label} was removed.` };
+  } catch (error) {
+    state.staffRequestNotice = { type: "error", message: error.message || "Could not remove this student." };
+  } finally {
+    state.staffRequestBusy = null;
+    renderContentOnly();
+  }
+}
+
+function dismissStaffRequestNotice() {
+  state.staffRequestNotice = null;
+  renderContentOnly();
+}
+
 function escapeHtml(value) {
+  if (value === null || value === undefined) return "";
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
@@ -2206,6 +2331,7 @@ function marketingScreen() {
           <a href="#features">Programs</a>
           <a href="#compare">Compare</a>
           <a href="#reviews">Reviews</a>
+          <a href="#careers">Work With Us</a>
           <a href="#contact">Contact</a>
         </nav>
         <div class="m-nav-social">${socialLinksHtml()}</div>
@@ -2273,9 +2399,9 @@ function marketingScreen() {
         <div class="m-cards">
           ${allReviews.map((review) => `
             <article class="m-card m-review reveal">
-              <p dir="auto">&ldquo;${review.quote}&rdquo;</p>
-              <strong>${review.name}</strong>
-              ${review.role_or_school ? `<span class="m-review-role">${review.role_or_school}</span>` : ""}
+              <p dir="auto">&ldquo;${escapeHtml(review.quote)}&rdquo;</p>
+              <strong>${escapeHtml(review.name)}</strong>
+              ${review.role_or_school ? `<span class="m-review-role">${escapeHtml(review.role_or_school)}</span>` : ""}
               ${review.rating ? `<span class="m-review-stars">${"★".repeat(review.rating)}${"☆".repeat(5 - review.rating)}</span>` : ""}
             </article>
           `).join("")}
@@ -2301,6 +2427,29 @@ function marketingScreen() {
           <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? "Sending…" : "Submit review"}</button>
           <small>Reviews are checked by a Manager before they go live.</small>
         </form>
+      </section>
+
+      <section id="careers" class="m-section reveal">
+        <h2>Work With Us</h2>
+        <p class="m-sub">${school.name} is growing — here's what we're hiring for right now.</p>
+        <div class="m-cards">
+          ${
+            state.publicOpportunities.length
+              ? state.publicOpportunities
+                  .map(
+                    (op) => `
+              <article class="m-card reveal">
+                <h3>${escapeHtml(op.title)}</h3>
+                <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || "Details on request"}</p>
+                ${op.description ? `<p>${escapeHtml(op.description)}</p>` : ""}
+              </article>
+            `,
+                  )
+                  .join("")
+              : `<p class="empty">No open roles right now — check back soon, or introduce yourself using the contact form below.</p>`
+          }
+        </div>
+        <a class="m-cta-secondary" href="#contact">Interested? Get in touch</a>
       </section>
 
       <section id="contact" class="m-section m-contact reveal">
@@ -2518,14 +2667,20 @@ function instructorRow(instructor) {
   const actionLabel = account ? "Reset password" : "Generate login";
   const handlerName = account ? "resetCredentials" : "generateCredentials";
   const handler = `${handlerName}('${key}', 'Instructor', '${escapeJs(instructor.email)}', '${escapeJs(instructor.name)}', '${escapeJs(instructor.name)}')`;
+  const canRemove = canRemoveAccounts(state.role);
+  const removeKey = `remove-instructor-${instructor.name}`;
+  const removeBusy = state.accountsBusy === removeKey;
 
   return `
     <tr>
-      <td><strong>${instructor.name}</strong></td>
-      <td>${instructor.email}</td>
-      <td>${ownClasses.length ? ownClasses.map((c) => c.name).join(", ") : "No classes yet"}</td>
+      <td><strong>${escapeHtml(instructor.name)}</strong></td>
+      <td>${escapeHtml(instructor.email)}</td>
+      <td>${ownClasses.length ? ownClasses.map((c) => escapeHtml(c.name)).join(", ") : "No classes yet"}</td>
       <td>${status}</td>
-      <td><button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? "Working…" : actionLabel}</button></td>
+      <td>
+        <button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? "Working…" : actionLabel}</button>
+        ${canRemove ? `<button onclick="handleRemoveInstructor('${escapeJs(instructor.name)}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? "Removing…" : "Remove"}</button>` : ""}
+      </td>
     </tr>
   `;
 }
@@ -2546,6 +2701,29 @@ function instructorsView() {
       </table>
     </section>
   `;
+}
+
+// Removing an instructor is Manager-only and irreversible: it deletes both
+// the instructor's school record and their portal login (if one was ever
+// issued), via api/remove-account.js. The server itself refuses if the
+// instructor still has classes assigned, so a Manager sees that reason
+// directly rather than a generic failure.
+async function handleRemoveInstructor(name) {
+  if (!window.confirm(`Remove ${name}? This deletes their instructor record and login. This can't be undone.`)) return;
+  const key = `remove-instructor-${name}`;
+  state.accountsBusy = key;
+  state.accountsNotice = null;
+  renderContentOnly();
+  try {
+    await removeAccountApi({ role: "Instructor", ref: name });
+    await refreshAfterWrite();
+    state.accountsNotice = { type: "removed", message: `${name} was removed.` };
+  } catch (error) {
+    state.accountsNotice = { type: "error", message: error.message };
+  } finally {
+    state.accountsBusy = null;
+    renderContentOnly();
+  }
 }
 
 function accountsView() {
@@ -2597,7 +2775,7 @@ function leadsView() {
         <tbody>${
           leads
             .map(
-              (lead) => `<tr><td>${new Date(lead.created_at).toLocaleString()}</td><td>${badge(lead.kind === "call_request" ? "Call requested" : "Contact")}</td><td><strong>${lead.name}</strong></td><td>${lead.email}</td><td>${lead.phone || "—"}</td><td>${lead.message || "—"}</td></tr>`,
+              (lead) => `<tr><td>${new Date(lead.created_at).toLocaleString()}</td><td>${badge(lead.kind === "call_request" ? "Call requested" : "Contact")}</td><td><strong>${escapeHtml(lead.name)}</strong></td><td>${escapeHtml(lead.email)}</td><td>${escapeHtml(lead.phone) || "—"}</td><td>${escapeHtml(lead.message) || "—"}</td></tr>`,
             )
             .join("") || `<tr><td colspan="6" class="empty">No messages yet.</td></tr>`
         }</tbody>
@@ -2626,7 +2804,7 @@ function reviewsView() {
         <tbody>${
           decided
             .map(
-              (r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td><strong>${r.name}</strong></td><td dir="auto">${r.quote}</td><td>${"★".repeat(r.rating || 5)}</td><td>${badge(r.status === "approved" ? "Approved" : "Rejected")}</td></tr>`,
+              (r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td><strong>${escapeHtml(r.name)}</strong></td><td dir="auto">${escapeHtml(r.quote)}</td><td>${"★".repeat(r.rating || 5)}</td><td>${badge(r.status === "approved" ? "Approved" : "Rejected")}</td></tr>`,
             )
             .join("") || `<tr><td colspan="5" class="empty">No decisions yet.</td></tr>`
         }</tbody>
@@ -2640,8 +2818,8 @@ function reviewRow(review) {
   return `
     <tr>
       <td>${new Date(review.created_at).toLocaleString()}</td>
-      <td><strong>${review.name}</strong>${review.role_or_school ? `<span>${review.role_or_school}</span>` : ""}</td>
-      <td dir="auto">${review.quote}</td>
+      <td><strong>${escapeHtml(review.name)}</strong>${review.role_or_school ? `<span>${escapeHtml(review.role_or_school)}</span>` : ""}</td>
+      <td dir="auto">${escapeHtml(review.quote)}</td>
       <td>${"★".repeat(review.rating || 5)}</td>
       <td>
         <button onclick="setReviewStatus('${review.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Approve"}</button>
@@ -2694,6 +2872,206 @@ async function setReviewStatus(id, status) {
   }
 }
 
+// ---------------------------------------------------------------------
+// Opportunities ("Work With Us"): a Manager posts and removes job
+// openings from here. Anything marked "Open" is what the public homepage
+// section (see marketingScreen()) shows to signed-out visitors — enforced
+// by Supabase RLS (0009_opportunities_and_removal_requests.sql), not by
+// this view.
+// ---------------------------------------------------------------------
+
+function opportunitiesView() {
+  const rows = state.opportunitiesDirectory || [];
+  return `
+    ${state.opportunitiesNotice ? opportunitiesNoticeBanner(state.opportunitiesNotice) : ""}
+    <p class="hint">Opportunities marked "Open" appear publicly on the homepage's Work With Us section right away.</p>
+    <div class="toolbar"><button onclick="openModal('addOpportunity')">Add opportunity</button></div>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>Opportunities</h2><span>${rows.length} total</span></div>
+      <table>
+        <thead><tr><th>Title</th><th>Location</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
+        <tbody>${rows.map(opportunityRow).join("") || `<tr><td colspan="5" class="empty">No opportunities yet — add one to get started.</td></tr>`}</tbody>
+      </table>
+    </section>
+  `;
+}
+
+function opportunityRow(op) {
+  const busy = state.opportunitiesBusy === op.id;
+  const isOpen = op.status === "open";
+  return `
+    <tr>
+      <td><strong>${escapeHtml(op.title)}</strong>${op.description ? `<span>${escapeHtml(op.description)}</span>` : ""}</td>
+      <td>${escapeHtml(op.location) || "—"}</td>
+      <td>${escapeHtml(op.employment_type) || "—"}</td>
+      <td>${badge(isOpen ? "Open" : "Closed")}</td>
+      <td>
+        <button onclick="setOpportunityStatus('${op.id}', '${isOpen ? "closed" : "open"}')" ${busy ? "disabled" : ""}>${busy ? "Working…" : isOpen ? "Close" : "Reopen"}</button>
+        <button onclick="removeOpportunity('${op.id}', '${escapeJs(op.title)}')" ${busy ? "disabled" : ""}>Remove</button>
+      </td>
+    </tr>
+  `;
+}
+
+function opportunitiesNoticeBanner(notice) {
+  return `
+    <section class="panel credential-reveal error">
+      <div class="panel-head"><h2>Could not complete that request</h2><button onclick="dismissOpportunitiesNotice()">Dismiss</button></div>
+      <p>${escapeHtml(notice.message)}</p>
+    </section>
+  `;
+}
+
+function dismissOpportunitiesNotice() {
+  state.opportunitiesNotice = null;
+  renderContentOnly();
+}
+
+function addOpportunityModal() {
+  return `
+    <h2>Add an opportunity</h2>
+    <p class="hint">Published as "Open" immediately — visible on the homepage's Work With Us section right away.</p>
+    ${modalMessages()}
+    <form onsubmit="handleAddOpportunity(event)">
+      <label>Title<input type="text" name="title" required /></label>
+      <label>Location<input type="text" name="location" placeholder="e.g. On-site, or Remote" /></label>
+      <label>Type
+        <select name="employmentType">
+          <option value="Full-time">Full-time</option>
+          <option value="Part-time">Part-time</option>
+          <option value="Contract">Contract</option>
+          <option value="Volunteer">Volunteer</option>
+        </select>
+      </label>
+      <label>Description<textarea name="description" rows="4"></textarea></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Adding…" : "Add opportunity"}</button>
+      </div>
+    </form>
+  `;
+}
+
+async function handleAddOpportunity(event) {
+  event.preventDefault();
+  const form = event.target;
+  const title = form.title.value.trim();
+  const location = form.location.value.trim();
+  const employmentType = form.employmentType.value;
+  const description = form.description.value.trim();
+  if (!title) {
+    state.modalError = "Please add a title.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseInsert("opportunities", [
+      {
+        title,
+        location: location || null,
+        employment_type: employmentType,
+        description: description || null,
+        status: "open",
+      },
+    ]);
+    await loadOpportunitiesDirectory();
+    closeModal();
+    navigate("opportunities");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not add this opportunity. Has migration 0009 been run yet?";
+    render();
+  }
+}
+
+async function loadOpportunitiesDirectory() {
+  if (!hasSupabaseConfig() || !state.session) return;
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  try {
+    const response = await fetch(
+      `${base}/rest/v1/opportunities?select=id,title,description,location,employment_type,status,created_at&order=created_at.desc`,
+      {
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${state.session.access_token}`,
+          Accept: "application/json",
+        },
+      },
+    );
+    state.opportunitiesDirectory = response.ok ? await response.json() : [];
+  } catch {
+    state.opportunitiesDirectory = [];
+  }
+}
+
+// Anyone, signed in or not, can see "open" opportunities — this is what
+// powers the homepage's Work With Us section for a signed-out visitor.
+async function loadPublicOpportunities() {
+  if (!hasSupabaseConfig()) return;
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(
+      `${base}/rest/v1/opportunities?status=eq.open&select=id,title,description,location,employment_type,created_at&order=created_at.desc`,
+      {
+        headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}`, Accept: "application/json" },
+      },
+    );
+    state.publicOpportunities = response.ok ? await response.json() : [];
+  } catch {
+    state.publicOpportunities = [];
+  }
+}
+
+async function setOpportunityStatus(id, status) {
+  if (!state.session) return;
+  state.opportunitiesBusy = id;
+  renderContentOnly();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    await fetch(`${base}/rest/v1/opportunities?id=eq.${id}`, {
+      method: "PATCH",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ status }),
+    });
+    await loadOpportunitiesDirectory();
+  } finally {
+    state.opportunitiesBusy = null;
+    renderContentOnly();
+  }
+}
+
+async function removeOpportunity(id, title) {
+  if (!state.session) return;
+  if (!window.confirm(`Remove the "${title}" opportunity? This can't be undone.`)) return;
+  state.opportunitiesBusy = id;
+  renderContentOnly();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(`${base}/rest/v1/opportunities?id=eq.${id}`, {
+      method: "DELETE",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        Prefer: "return=minimal",
+      },
+    });
+    if (!response.ok) throw new Error("Could not remove this opportunity.");
+    await loadOpportunitiesDirectory();
+  } catch (error) {
+    state.opportunitiesNotice = { type: "error", message: error.message };
+  } finally {
+    state.opportunitiesBusy = null;
+    renderContentOnly();
+  }
+}
+
 function accountRow({ key, role, name, email, refId, account }) {
   const busy = state.accountsBusy === key;
   const status = account
@@ -2721,7 +3099,16 @@ function accountsNoticeBanner(notice) {
     return `
       <section class="panel credential-reveal error">
         <div class="panel-head"><h2>Could not complete that request</h2><button onclick="dismissAccountsNotice()">Dismiss</button></div>
-        <p>${notice.message}</p>
+        <p>${escapeHtml(notice.message)}</p>
+      </section>
+    `;
+  }
+
+  if (notice.type === "removed") {
+    return `
+      <section class="panel credential-reveal">
+        <div class="panel-head"><h2>Removed</h2><button onclick="dismissAccountsNotice()">Dismiss</button></div>
+        <p>${escapeHtml(notice.message)}</p>
       </section>
     `;
   }
@@ -2785,6 +3172,26 @@ async function loadLeads() {
 
 async function callAccountApi(payload) {
   const response = await fetch("/api/create-account", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(body.error || "Request failed.");
+  }
+  return body;
+}
+
+// Removing an instructor or student always goes through this server
+// endpoint (never a direct table delete from the browser) so the login is
+// revoked in the same step as the school record — see api/remove-account.js.
+async function removeAccountApi(payload) {
+  if (!state.session) throw new Error("Sign in and try again.");
+  const response = await fetch("/api/remove-account", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -2942,6 +3349,8 @@ async function handleSignOut() {
   state.viewerContext = null;
   state.accountsDirectory = null;
   state.leadsDirectory = null;
+  state.opportunitiesDirectory = null;
+  state.staffRequestNotice = null;
   state.role = "Super Admin";
   state.view = "dashboard";
   state.authMode = "marketing";
@@ -2989,6 +3398,8 @@ async function handleIdleTimeout() {
   state.viewerContext = null;
   state.accountsDirectory = null;
   state.leadsDirectory = null;
+  state.opportunitiesDirectory = null;
+  state.staffRequestNotice = null;
   state.role = "Super Admin";
   state.view = "dashboard";
   state.authMode = "signed-out";
@@ -3091,11 +3502,19 @@ window.setStudentClassFilter = setStudentClassFilter;
 window.exportStudentsCsv = exportStudentsCsv;
 window.renderAttendanceRoster = renderAttendanceRoster;
 window.handleTakeAttendance = handleTakeAttendance;
-window.toggleStaffRequestDates = toggleStaffRequestDates;
+window.toggleStaffRequestFields = toggleStaffRequestFields;
 window.handleAddStaffRequest = handleAddStaffRequest;
 window.setStaffRequestStatus = setStaffRequestStatus;
+window.approveRemovalRequest = approveRemovalRequest;
+window.dismissStaffRequestNotice = dismissStaffRequestNotice;
 window.exportReportsCsv = exportReportsCsv;
 window.handleSaveSettings = handleSaveSettings;
+window.handleRemoveInstructor = handleRemoveInstructor;
+window.handleRemoveStudent = handleRemoveStudent;
+window.handleAddOpportunity = handleAddOpportunity;
+window.setOpportunityStatus = setOpportunityStatus;
+window.removeOpportunity = removeOpportunity;
+window.dismissOpportunitiesNotice = dismissOpportunitiesNotice;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -3121,6 +3540,9 @@ window.addEventListener(
 async function initApp() {
   render();
   loadPublicReviews().then(() => {
+    if (state.authMode === "marketing") render();
+  });
+  loadPublicOpportunities().then(() => {
     if (state.authMode === "marketing") render();
   });
 

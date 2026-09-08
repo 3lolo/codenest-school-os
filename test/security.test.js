@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   canAccessModule,
   canManageAnyAccounts,
+  canManageOpportunities,
+  canRemoveAccounts,
   canViewStudent,
   filterStudentsForViewer,
   issuableRolesFor,
@@ -19,6 +21,7 @@ const navItems = [
   ["assignments", "Assignments"],
   ["attendance", "Attendance"],
   ["reports", "Reports"],
+  ["opportunities", "Work With Us"],
   ["settings", "Settings"],
 ];
 
@@ -80,6 +83,25 @@ test("only managers can access the reviews moderation module", () => {
   assert.equal(canAccessModule("Instructor", "reviews"), false);
   assert.equal(canAccessModule("Student", "reviews"), false);
   assert.equal(canAccessModule("Parent", "reviews"), false);
+});
+
+test("only managers can manage Work With Us opportunities", () => {
+  assert.equal(canAccessModule("Super Admin", "opportunities"), true);
+  assert.equal(canAccessModule("School Admin", "opportunities"), true);
+  assert.equal(canAccessModule("Instructor", "opportunities"), false);
+  assert.equal(canAccessModule("Student", "opportunities"), false);
+  assert.equal(canAccessModule("Parent", "opportunities"), false);
+  assert.equal(canManageOpportunities("Super Admin"), true);
+  assert.equal(canManageOpportunities("School Admin"), true);
+  assert.equal(canManageOpportunities("Instructor"), false);
+});
+
+test("only managers can remove an instructor or student outright; instructors never get this", () => {
+  assert.equal(canRemoveAccounts("Super Admin"), true);
+  assert.equal(canRemoveAccounts("School Admin"), true);
+  assert.equal(canRemoveAccounts("Instructor"), false);
+  assert.equal(canRemoveAccounts("Student"), false);
+  assert.equal(canRemoveAccounts("Parent"), false);
 });
 
 test("roleLabel presents Super Admin and School Admin as Manager, leaves other roles alone", () => {
@@ -175,4 +197,39 @@ test("create-account API re-verifies the caller server-side and scopes instructo
   assert.match(source, /callerIsInstructor && role !== "Student"/);
   // An instructor's target student must belong to one of their own classes.
   assert.match(source, /ownClassIds\.has\(studentClassId\)/);
+});
+
+test("remove-account API re-verifies the caller is a Manager server-side and revokes the login before deleting the record", async () => {
+  const source = await readFile(new URL("../api/remove-account.js", import.meta.url), "utf8");
+  // Never trust a role claimed by the browser here either — an Instructor
+  // must never reach this endpoint, not even for their own students.
+  assert.match(source, /user_profiles\?user_id=eq\.\$\{caller\.id\}/);
+  assert.match(source, /if \(!callerIsManager\)/);
+  // Deleting the auth user (the login) happens before deleting the school
+  // record, for both roles.
+  assert.match(source, /auth\/v1\/admin\/users\/\$\{profile\.user_id\}/);
+  // An instructor with classes still assigned can't be removed out from
+  // under those classes.
+  assert.match(source, /classRows\.length > 0/);
+});
+
+test("opportunities migration lets anyone read only open postings, and only a Manager write", async () => {
+  const sql = await readFile(
+    new URL("../supabase/migrations/0009_opportunities_and_removal_requests.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(sql, /enable row level security/i);
+  assert.match(sql, /status = 'open'/);
+  assert.match(sql, /public\.is_admin\(\)/);
+  assert.doesNotMatch(sql, /for select\s+using\s*\(\s*true\s*\)/i);
+});
+
+test("removal-request insert policy requires the target student to be in the requesting instructor's own class", async () => {
+  const sql = await readFile(
+    new URL("../supabase/migrations/0009_opportunities_and_removal_requests.sql", import.meta.url),
+    "utf8",
+  );
+  assert.match(sql, /kind in \('message', 'holiday', 'removal'\)/);
+  assert.match(sql, /staff_requests\.kind <> 'removal'/);
+  assert.match(sql, /class\.instructor = staff_requests\.instructor_name/);
 });
