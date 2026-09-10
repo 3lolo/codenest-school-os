@@ -69,12 +69,18 @@ Contact form.
   panel every Manager already has, so there's nothing extra to check.
   Swap the image or copy any time by editing that file and the
   `promo-modal-body` text in `src/app.js`.
-- Real reviews: any visitor can submit a review from the **Leave a
-  review** form on the homepage. Submissions land as `pending` in a
-  Supabase table (`reviews`, see migration `0005`) and are invisible to
-  the public until a Manager approves them from the in-app **Reviews**
-  panel. Approved reviews then appear on the homepage alongside the
-  sample ones — English and Arabic both render correctly (`dir="auto"`).
+- Real reviews: any visitor can submit a review by clicking the **★ Leave
+  a review** button next to the "What Parents & Students Say" heading,
+  which opens the review form in a popup (rather than showing the form
+  open by default). Submissions land as `pending` in a Supabase table
+  (`reviews`, see migration `0005`) and are invisible to the public until
+  a Manager approves them from the in-app **Reviews** panel. Approved
+  reviews then appear on the homepage alongside the sample ones — English
+  and Arabic both render correctly (`dir="auto"`).
+- "How We Compare" is a set of three side-by-side cards (not a table) —
+  Hero Tech Academy, pre-recorded video courses, and one-off workshops —
+  each listing the same feature checklist from `compareRows`, with the
+  Hero Tech Academy card visually highlighted as the recommended option.
 - Social links: `school.social.facebook` and `school.social.whatsapp` in
   `src/app.js` drive the Facebook/WhatsApp links shown in the nav,
   contact section, and footer.

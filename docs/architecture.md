@@ -255,7 +255,10 @@ internal operations side, not the homepage's sales pitch. It covers:
   visiting parent.
 - A "how it compares" section (`compareRows`) — against generic
   alternatives (pre-recorded video courses, one-off workshops) from a
-  parent's buying perspective.
+  parent's buying perspective. Rendered as three comparison cards
+  (`.m-compare-grid`), not a table, with the Hero Tech Academy card
+  visually highlighted as the recommended option — same underlying data,
+  a more scannable, mobile-friendly presentation.
 - A reviews section that renders `[...state.publicReviews, ...sampleReviews]`
   — real, Manager-approved reviews first, then starter reviews (three
   English, two Arabic) as filler until enough real ones exist, with no
@@ -264,11 +267,14 @@ internal operations side, not the homepage's sales pitch. It covers:
   direction.
 - A public "Leave a review" form (`handleReviewSubmit()`) that inserts
   into `public.reviews` (migration `0005_reviews.sql`) using the anon key
-  under an insert-only RLS policy restricted to `status = 'pending'`.
-  Managers moderate submissions from the in-app **Reviews** panel
-  (`reviewsView()` / `setReviewStatus()`), gated by `public.is_admin()`;
-  only `status = 'approved'` rows are ever publicly readable
-  (`loadPublicReviews()`).
+  under an insert-only RLS policy restricted to `status = 'pending'`. The
+  form itself is hidden behind a "★ Leave a review" button
+  (`openReviewForm()`/`closeReviewForm()`, `state.reviewFormOpen`) that
+  opens it in a modal dialog, rather than showing the form open by
+  default. Managers moderate submissions from the in-app **Reviews**
+  panel (`reviewsView()` / `setReviewStatus()`), gated by
+  `public.is_admin()`; only `status = 'approved'` rows are ever publicly
+  readable (`loadPublicReviews()`).
 - A **Work With Us** section (`state.publicOpportunities`, loaded by
   `loadPublicOpportunities()`) that lists every `public.opportunities`
   row with `status = 'open'`, readable by anyone under RLS (no anon key

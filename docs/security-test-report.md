@@ -1,12 +1,24 @@
 # Security Test Report
 
-Date: 2026-09-08
+Date: 2026-09-10
 
 ## Result
 
 Passed: 26 / 26 automated tests.
 
-## Latest Update: Opportunity Detail Pages, and Two More Unescaped Fields Found
+## Latest Update: Customer-Facing Redesign (Reviews, Comparison), Full Re-Audit, and a Site-Wide Color/Visual Pass
+
+Requested this round: a less pushy way to leave a review, a comparison section that isn't a bare table, a strict re-check of every tab's buttons and logic, and an overall color/visual polish pass on the dashboard. None of this touched the RLS/schema layer — no new migration — so it's a pure client-side (`src/app.js`, `src/styles.css`) change.
+
+**Reviews — button instead of an always-open form.** The public homepage previously showed the "Leave a review" form open by default under the review cards, which read as pushy. It's now a pill-shaped "★ Leave a review" button next to the section heading (`openReviewForm()`); clicking it opens the existing form inside a modal dialog (reusing the same overlay pattern as the enrollment promo popup), closable via the × button, clicking outside, or Escape. New state field: `reviewFormOpen`. The submit logic, validation, and Supabase insert are unchanged — only how the form is revealed changed.
+
+**"How We Compare" — cards instead of a table.** The `<table class="m-compare">` comparing Hero Tech Academy against pre-recorded video courses and one-off workshops is gone. It's now three side-by-side comparison cards (`.m-compare-grid` / `.m-compare-card`), one per option, each listing the same five feature rows with a check/partial/cross icon. The "Hero Tech Academy" card is visually highlighted (teal gradient, "Us" badge, slightly scaled up) so it reads as the recommended option at a glance. Same underlying `compareRows`/`compareIcon` data — only the markup and CSS changed. Stacks to one column on narrow screens.
+
+**Full re-audit (strict pass).** Re-ran the established checks against the current codebase: every `onclick`/`onsubmit`/`onchange` handler referenced in markup resolves to an exported `window.*` function (0 orphans, including two handlers built dynamically as strings — `approveRemovalRequest`/`setStaffRequestStatus` for removal requests, `generateCredentials`/`resetCredentials` for account issuing — verified by hand since the string-matching audit script can't see through the indirection); every `<form>` has `onsubmit`; no dead `href="#"` links; no leftover `TODO`/`FIXME`/`XXX` markers. Manually re-verified the two newest features end-to-end: `approveRemovalRequest()` calls `removeAccountApi({ role: "Student", ref })`, which matches `api/remove-account.js`'s expected `{ role, ref }` body exactly; the Opportunities panel's add/status-toggle/remove handlers all match the `opportunities` table and RLS policy from migration `0009`. All 26 automated tests still pass; `npm run build` still succeeds.
+
+**Color/visual pass.** Refined the CSS custom properties in `:root` — a richer, higher-contrast brand teal, and consolidated the badge/notice colors (previously repeated as raw hex in ~8 places) into named tokens (`--success`/`--success-bg`, `--danger`/`--danger-bg`, `--warning`/`--warning-bg`) plus radius/shadow tokens (`--radius`, `--radius-lg`, `--shadow-sm`). Applied consistently: buttons now have a real hover lift/shadow instead of only an outline; the sidebar got a subtle gradient and the active nav item now has a gold left-accent bar instead of just a background tint; dashboard metric cards each get a color-coded top border (teal/coral/gold/blue/green/dark-teal, matching the marketing page's card-accent pattern) and lift slightly on hover; table rows highlight on hover for readability. Visually spot-checked with a headless-browser screenshot of the marketing page (hero, comparison cards, review modal) and a static render of the dashboard's shared components (sidebar, metric grid, panels, table, badges) against the updated stylesheet — all rendered as intended, no layout breakage.
+
+## Earlier Update: Opportunity Detail Pages, and Two More Unescaped Fields Found
 
 The Manager asked for one more thing on top of Work With Us: clicking an
 opportunity should open its own page with the full description and an

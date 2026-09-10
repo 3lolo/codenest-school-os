@@ -39,6 +39,7 @@ const state = {
   publicReviews: [],
   reviewNotice: null,
   reviewBusy: false,
+  reviewFormOpen: false,
   reviewsDirectory: null,
   reviewsBusy: null,
   promoModalDismissed: false,
@@ -2365,6 +2366,7 @@ function marketingScreen() {
   const reviewNotice = state.reviewNotice;
   const allReviews = [...state.publicReviews, ...sampleReviews];
   const showPromo = !state.promoModalDismissed;
+  const showReviewForm = state.reviewFormOpen;
   return `
     <div class="marketing">
       ${showPromo ? `
@@ -2376,6 +2378,34 @@ function marketingScreen() {
               <p>Ready to help your child start? Book a free trial class today.</p>
               <button type="button" class="promo-cta" onclick="openPromoForm()">Fill the form</button>
             </div>
+          </div>
+        </div>
+      ` : ""}
+      ${showReviewForm ? `
+        <div class="promo-overlay" onclick="if (event.target === this) closeReviewForm()">
+          <div class="review-modal" role="dialog" aria-modal="true" aria-label="Leave a review">
+            <button type="button" class="promo-close" onclick="closeReviewForm()" aria-label="Close">&times;</button>
+            <form class="m-review-form" onsubmit="handleReviewSubmit(event)">
+              <h3>Leave a review</h3>
+              <p class="m-sub">Tell other parents about your child's experience — it helps other families decide.</p>
+              ${reviewNotice ? `<p class="notice-row ${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}<button type="button" class="notice-dismiss" onclick="dismissReviewNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
+              <div class="m-review-form-grid">
+                <label>Your name<input type="text" name="name" required /></label>
+                <label>You are a... (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent of a Code Builders student" /></label>
+              </div>
+              <label>Rating
+                <select name="rating">
+                  <option value="5">★★★★★ (5)</option>
+                  <option value="4">★★★★☆ (4)</option>
+                  <option value="3">★★★☆☆ (3)</option>
+                  <option value="2">★★☆☆☆ (2)</option>
+                  <option value="1">★☆☆☆☆ (1)</option>
+                </select>
+              </label>
+              <label>Your review<textarea name="quote" rows="3" required></textarea></label>
+              <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? "Sending…" : "Submit review"}</button>
+              <small>Reviews are checked by a Manager before they go live.</small>
+            </form>
           </div>
         </div>
       ` : ""}
@@ -2440,20 +2470,40 @@ function marketingScreen() {
 
       <section id="compare" class="m-section reveal">
         <h2>How We Compare</h2>
-        <p class="m-sub">How Hero Tech Academy stacks up against common alternatives for kids' coding education.</p>
-        <div class="table-panel">
-          <table class="m-compare">
-            <thead><tr><th></th><th>${school.name}</th><th>Pre-recorded video courses</th><th>One-off workshops</th></tr></thead>
-            <tbody>
-              ${compareRows.map(([label, a, b, c]) => `<tr><td>${label}</td><td>${compareIcon(a)}</td><td>${compareIcon(b)}</td><td>${compareIcon(c)}</td></tr>`).join("")}
-            </tbody>
-          </table>
+        <p class="m-sub">How ${escapeHtml(school.name)} stacks up against common alternatives for kids' coding education.</p>
+        <div class="m-compare-grid">
+          ${[
+            { name: school.name, highlight: true, index: 0 },
+            { name: "Pre-recorded video courses", highlight: false, index: 1 },
+            { name: "One-off workshops", highlight: false, index: 2 },
+          ].map(
+            (col) => `
+            <article class="m-compare-card ${col.highlight ? "m-compare-highlight" : ""} reveal">
+              ${col.highlight ? `<span class="m-compare-badge">Us</span>` : ""}
+              <h3>${escapeHtml(col.name)}</h3>
+              <ul class="m-compare-list">
+                ${compareRows
+                  .map((row) => {
+                    const label = row[0];
+                    const status = row[col.index + 1];
+                    return `<li class="m-compare-row m-compare-${status}">${compareIcon(status)}<span>${label}</span></li>`;
+                  })
+                  .join("")}
+              </ul>
+            </article>
+          `,
+          ).join("")}
         </div>
       </section>
 
       <section id="reviews" class="m-section reveal">
-        <h2>What Parents &amp; Students Say</h2>
-        <p class="m-sub">We've trained <strong>60+ students</strong> so far — here's what a few of them have to say.</p>
+        <div class="m-section-head">
+          <div>
+            <h2>What Parents &amp; Students Say</h2>
+            <p class="m-sub">We've trained <strong>60+ students</strong> so far — here's what a few of them have to say.</p>
+          </div>
+          <button type="button" class="m-review-cta" onclick="openReviewForm()"><span aria-hidden="true">★</span> Leave a review</button>
+        </div>
         <div class="m-cards">
           ${allReviews.map((review) => `
             <article class="m-card m-review reveal">
@@ -2464,27 +2514,6 @@ function marketingScreen() {
             </article>
           `).join("")}
         </div>
-
-        <form class="m-review-form" onsubmit="handleReviewSubmit(event)">
-          <h3>Leave a review</h3>
-          ${reviewNotice ? `<p class="notice-row ${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}<button type="button" class="notice-dismiss" onclick="dismissReviewNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
-          <div class="m-review-form-grid">
-            <label>Your name<input type="text" name="name" required /></label>
-            <label>You are a... (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent of a Code Builders student" /></label>
-          </div>
-          <label>Rating
-            <select name="rating">
-              <option value="5">★★★★★ (5)</option>
-              <option value="4">★★★★☆ (4)</option>
-              <option value="3">★★★☆☆ (3)</option>
-              <option value="2">★★☆☆☆ (2)</option>
-              <option value="1">★☆☆☆☆ (1)</option>
-            </select>
-          </label>
-          <label>Your review<textarea name="quote" rows="3" required></textarea></label>
-          <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? "Sending…" : "Submit review"}</button>
-          <small>Reviews are checked by a Manager before they go live.</small>
-        </form>
       </section>
 
       <section id="careers" class="m-section reveal">
@@ -2730,6 +2759,17 @@ async function handleReviewSubmit(event) {
 }
 
 function dismissReviewNotice() {
+  state.reviewNotice = null;
+  render();
+}
+
+function openReviewForm() {
+  state.reviewFormOpen = true;
+  render();
+}
+
+function closeReviewForm() {
+  state.reviewFormOpen = false;
   state.reviewNotice = null;
   render();
 }
@@ -3565,6 +3605,8 @@ window.handleContactSubmit = handleContactSubmit;
 window.dismissContactNotice = dismissContactNotice;
 window.handleReviewSubmit = handleReviewSubmit;
 window.dismissReviewNotice = dismissReviewNotice;
+window.openReviewForm = openReviewForm;
+window.closeReviewForm = closeReviewForm;
 window.setReviewStatus = setReviewStatus;
 window.handleLoginSubmit = handleLoginSubmit;
 window.handleSignOut = handleSignOut;
@@ -3609,6 +3651,10 @@ window.closeOpportunityDetail = closeOpportunityDetail;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+  if (state.reviewFormOpen) {
+    closeReviewForm();
+    return;
+  }
   if (!state.promoModalDismissed && state.authMode === "marketing") {
     dismissPromoModal();
     return;
