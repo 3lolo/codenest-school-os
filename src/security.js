@@ -13,11 +13,11 @@ export function roleLabel(role) {
 }
 
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings"],
-  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities"],
-  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "accounts"],
-  Student: ["dashboard", "assignments", "materials", "attendance"],
-  Parent: ["dashboard", "students", "assignments", "materials", "attendance"],
+  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "groups", "grades", "chat", "profile"],
+  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "groups", "grades", "chat", "profile"],
+  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "accounts", "groups", "grades", "chat", "profile"],
+  Student: ["dashboard", "groups", "materials", "assignments", "grades", "attendance", "chat", "profile"],
+  Parent: ["dashboard", "students", "groups", "assignments", "materials", "attendance", "grades", "chat", "profile"],
 };
 
 // Manager (Super Admin or School Admin) can issue Manager, Instructor, and
@@ -49,6 +49,14 @@ export function canCreateClasses(role) {
 }
 
 export function canCreateStudentProfiles(role) {
+  return ["Super Admin", "School Admin", "Instructor"].includes(role);
+}
+
+// Only staff create assignments and enter grades. Students and Parents see
+// both read-only — RLS enforces the same boundary server-side (see
+// supabase/migrations/0010_grades_and_chat.sql), this is just what keeps
+// the "New assignment" / "Grade" buttons from ever appearing for them.
+export function canManageAssignments(role) {
   return ["Super Admin", "School Admin", "Instructor"].includes(role);
 }
 

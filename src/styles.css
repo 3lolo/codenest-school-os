@@ -5,6 +5,8 @@
   --line: #dde2ea;
   --soft: #f5f7fb;
   --panel: #ffffff;
+  --panel-rgb: 255, 255, 255;
+  --bg: #eef1f6;
   --brand: #1f7a72;
   --brand-dark: #12514c;
   --brand-light: #e4f3f1;
@@ -26,16 +28,50 @@
   --shadow: 0 18px 40px rgba(20, 32, 46, 0.1);
 }
 
+/* Dark mode: a parallel token set, switched by a `data-theme="dark"`
+   attribute on <html> (see toggleTheme()/initTheme() in app.js). Nearly
+   every color used across the app is one of these variables, so this
+   block alone re-themes the whole site — marketing page, every login
+   screen, and the dashboard — with no per-component dark-mode CSS
+   needed elsewhere. */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ink: #eef2f6;
+  --muted: #99a7b6;
+  --line: #2b3646;
+  --soft: #1a2330;
+  --panel: #202b3a;
+  --panel-rgb: 32, 43, 58;
+  --bg: #10161f;
+  --brand: #3fb4a6;
+  --brand-dark: #1f7a72;
+  --brand-light: #1b3733;
+  --gold: #dba83c;
+  --coral: #e0836d;
+  --blue: #6d9bdd;
+  --green: #57b483;
+  --cream: #2c2515;
+  --success: #4cc290;
+  --success-bg: #163627;
+  --danger: #e2685a;
+  --danger-bg: #3a1f1c;
+  --warning: #e0b04a;
+  --warning-bg: #382c14;
+  --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  background: #eef1f6;
+  background: var(--bg);
   color: var(--ink);
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   letter-spacing: 0;
+  transition: background 0.2s ease, color 0.2s ease;
 }
 
 button,
@@ -46,7 +82,7 @@ select {
 
 button {
   border: 1px solid var(--line);
-  background: #fff;
+  background: var(--panel);
   color: var(--ink);
   border-radius: var(--radius-sm);
   min-height: 38px;
@@ -181,7 +217,7 @@ nav {
 
 .topbar {
   min-height: 86px;
-  background: rgba(255, 255, 255, 0.88);
+  background: rgba(var(--panel-rgb), 0.88);
   border-bottom: 1px solid var(--line);
   display: grid;
   grid-template-columns: minmax(230px, 1fr) minmax(280px, 440px) auto auto;
@@ -233,7 +269,7 @@ h2 {
   min-height: 40px;
   padding: 0 12px;
   color: var(--ink);
-  background: #fff;
+  background: var(--panel);
 }
 
 .content {
@@ -485,7 +521,7 @@ td span {
   display: flex;
   align-items: center;
   gap: 14px;
-  background: #fff;
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 18px;
@@ -555,7 +591,8 @@ dd {
 }
 
 code {
-  background: #f1f4f7;
+  background: var(--soft);
+  color: var(--ink);
   border-radius: 6px;
   padding: 3px 6px;
 }
@@ -727,14 +764,133 @@ code {
   font-size: 12px;
 }
 
-.auth-back {
+/* Specificity note: `.auth-card button` (below, in the auth-card block)
+   is a class+type selector, which beats a lone `.auth-back` class
+   selector regardless of source order — so this has to be written as
+   `.auth-card .auth-back` (class+class) to actually win and keep the
+   back link looking like a quiet text link instead of a full-width
+   filled button. */
+.auth-back,
+.auth-card .auth-back,
+.auth-chooser-card .auth-back {
   justify-self: start;
+  width: auto;
   background: transparent;
   border-color: transparent;
   color: var(--muted);
   font-size: 13px;
   padding: 0;
   min-height: auto;
+  font-weight: 600;
+}
+
+/* Theme toggle: one small round button, reused in the sidebar/topbar,
+   the marketing nav, and every auth screen. */
+.theme-toggle {
+  width: 38px;
+  min-height: 38px;
+  padding: 0;
+  border-radius: 999px;
+  font-size: 16px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--soft);
+  border-color: var(--line);
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.auth-theme-toggle {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #fff;
+}
+
+.auth-screen {
+  position: relative;
+}
+
+.auth-audience-tag {
+  background: var(--brand-light);
+  color: var(--brand-dark);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Login chooser: the two audience tiles a visitor picks between before
+   they ever see an email/password field (see loginChooserScreen() in
+   app.js). */
+.auth-chooser-card {
+  width: min(560px, 100%);
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 36px;
+  display: grid;
+  gap: 16px;
+  justify-items: center;
+  text-align: center;
+}
+
+.auth-chooser-grid {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 8px;
+}
+
+@media (max-width: 520px) {
+  .auth-chooser-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.auth-chooser-tile {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  text-align: center;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 24px 16px;
+  min-height: auto;
+  color: var(--ink);
+}
+
+.auth-chooser-tile strong {
+  font-size: 16px;
+}
+
+.auth-chooser-tile span {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.auth-chooser-icon {
+  font-size: 32px;
+}
+
+.auth-chooser-tile:hover {
+  border-color: var(--brand);
+  background: var(--brand-light);
+  box-shadow: var(--shadow-sm);
+}
+
+.auth-chooser-staff:hover {
+  border-color: var(--gold);
+  background: var(--cream);
 }
 
 /* ---------- Marketing / homepage ---------- */
@@ -745,7 +901,7 @@ code {
     radial-gradient(circle at 12% 8%, rgba(36, 107, 103, 0.09), transparent 45%),
     radial-gradient(circle at 88% 4%, rgba(201, 95, 79, 0.09), transparent 42%),
     radial-gradient(circle at 55% 34%, rgba(188, 134, 39, 0.07), transparent 40%),
-    #fff;
+    var(--bg);
   color: var(--ink);
   min-height: 100vh;
 }
@@ -759,7 +915,7 @@ code {
   border-bottom: 1px solid var(--line);
   position: sticky;
   top: 0;
-  background: rgba(255, 255, 255, 0.92);
+  background: rgba(var(--panel-rgb), 0.92);
   backdrop-filter: blur(10px);
   z-index: 3;
   transition: box-shadow 0.25s ease;
@@ -1159,7 +1315,7 @@ code {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--ink);
-  background: #fff;
+  background: var(--panel);
   font: inherit;
   width: 100%;
 }
@@ -1335,7 +1491,7 @@ code {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--ink);
-  background: #fff;
+  background: var(--panel);
   font: inherit;
   width: 100%;
 }
@@ -1601,7 +1757,7 @@ code {
 
 .modal-box {
   position: relative;
-  background: #fff;
+  background: var(--panel);
   border-radius: 16px;
   box-shadow: var(--shadow);
   width: min(480px, 100%);
@@ -1649,7 +1805,7 @@ code {
   border-radius: 8px;
   padding: 10px 12px;
   color: var(--ink);
-  background: #fff;
+  background: var(--panel);
   font: inherit;
   width: 100%;
 }
@@ -1783,7 +1939,105 @@ code {
   font-weight: 600;
 }
 
-.attendance-row select {
+.attendance-row select,
+.attendance-row input {
   width: auto;
   min-width: 120px;
+}
+
+/* Class chat (see chatView() in app.js) */
+.chat-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.chat-panel .panel-head select {
+  width: auto;
+  min-width: 160px;
+}
+
+.chat-thread {
+  display: grid;
+  gap: 10px;
+  max-height: 480px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+
+.chat-message {
+  position: relative;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  max-width: 80%;
+  justify-self: start;
+}
+
+.chat-message-own {
+  background: var(--brand-light);
+  border-color: var(--brand);
+  justify-self: end;
+}
+
+.chat-message-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.chat-message-meta strong {
+  font-size: 13px;
+}
+
+.chat-message-meta span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-message p {
+  margin: 0;
+  font-size: 14px;
+  word-wrap: break-word;
+}
+
+.chat-delete {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  min-height: auto;
+  padding: 0 4px;
+  font-size: 14px;
+}
+
+.chat-delete:hover {
+  color: var(--danger);
+  box-shadow: none;
+  transform: none;
+}
+
+.chat-composer {
+  display: flex;
+  gap: 10px;
+}
+
+.chat-composer input {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  min-height: 42px;
+  padding: 0 14px;
+  color: var(--ink);
+  background: var(--panel);
+}
+
+.chat-composer button {
+  flex: 0 0 auto;
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
 }

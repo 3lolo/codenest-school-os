@@ -3,6 +3,7 @@ import {
   canCreateClasses,
   canCreateInstructorProfiles,
   canCreateStudentProfiles,
+  canManageAssignments,
   canManageOpportunities,
   canRemoveAccounts,
   filterStudentsForViewer,
@@ -59,12 +60,21 @@ const state = {
   opportunitiesBusy: null,
   opportunitiesNotice: null,
   opportunityDetail: null,
+  theme: "light",
+  loginMode: null, // "student" | "staff" | null (chooser not yet answered)
+  chatClassId: null,
+  chatBusy: false,
+  chatError: "",
+  chatSendBusy: false,
+  profileBusy: false,
+  profileError: "",
+  profileNotice: "",
 };
 
 const config = window.CODENEST_CONFIG || {};
 const dataSource = {
-  label: "Not connected",
-  status: "Connect Supabase to load your school's data.",
+  label: "Connecting…",
+  status: "Loading your school's data…",
   error: "",
 };
 
@@ -73,15 +83,19 @@ const navItems = [
   ["instructors", "Instructors", "users"],
   ["students", "Students", "users"],
   ["classes", "Classes", "layers"],
+  ["groups", "My Groups", "layers"],
+  ["materials", "Materials", "folder"],
   ["assignments", "Assignments", "clipboard"],
+  ["grades", "Grades", "chart"],
   ["attendance", "Attendance", "check"],
+  ["chat", "Chat", "message"],
   ["staffRequests", "Requests", "message"],
   ["reports", "Reports", "chart"],
-  ["materials", "Materials", "folder"],
   ["accounts", "Accounts & Logins", "key"],
   ["leads", "Contact Requests", "message"],
   ["reviews", "Reviews", "chart"],
   ["opportunities", "Work With Us", "briefcase"],
+  ["profile", "Profile", "home"],
   ["settings", "Settings", "gear"],
 ];
 
@@ -118,6 +132,9 @@ let groupMembers = [];
 let materials = [];
 let attendanceRecords = [];
 let staffRequests = [];
+let grades = [];
+let chatMessages = [];
+let chatPollTimer = null;
 
 const icons = {
   grid: "▦",
@@ -142,6 +159,7 @@ function can(view) {
 
 function navigate(view) {
   if (!can(view)) return;
+  const leavingChat = state.view === "chat" && view !== "chat";
   state.view = view;
   render();
   if ((view === "accounts" || view === "instructors") && canManageAccounts()) {
@@ -155,6 +173,11 @@ function navigate(view) {
   }
   if (view === "opportunities" && canManageOpportunities(state.role)) {
     loadOpportunitiesDirectory().then(renderContentOnly);
+  }
+  if (view === "chat") {
+    enterChatView();
+  } else if (leavingChat) {
+    stopChatPolling();
   }
 }
 
@@ -207,8 +230,8 @@ function shell() {
         `).join("")}
       </nav>
       <div class="security-note">
-        <strong>RBAC active</strong>
-        <span>${roleLabel(state.role)} sees ${allowedNav.length} authorized modules.</span>
+        <strong>Secure account</strong>
+        <span>${roleLabel(state.role)} · ${allowedNav.length} tabs available to you.</span>
         <span>${dataSource.label}</span>
       </div>
     </aside>
@@ -224,6 +247,7 @@ function shell() {
           <input type="search" placeholder="Students, classes, assignments" value="${state.query}" oninput="setSearch(this.value)" />
         </label>
         <div class="account-chip">
+          <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
           <div>
             <strong>${state.profile?.full_name || state.session?.user?.email || roleLabel(state.role)}</strong>
             <span>${roleLabel(state.role)}</span>
@@ -243,15 +267,19 @@ function titleForView() {
     instructors: "Instructor Management",
     students: state.role === "Parent" ? "Linked Children" : "Student Management",
     classes: "Courses and Classes",
+    groups: "My Groups",
     assignments: "Assignment Center",
+    grades: ["Super Admin", "School Admin", "Instructor"].includes(state.role) ? "Gradebook" : "Grades",
     materials: "Class Materials",
     attendance: "Attendance",
+    chat: "Class Chat",
     staffRequests: ["Super Admin", "School Admin"].includes(state.role) ? "Staff Requests" : "Requests to Managers",
     reports: "Reports",
     accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
     leads: "Contact Requests",
     reviews: "Reviews",
     opportunities: "Work With Us",
+    profile: "My Profile",
     settings: "School Settings",
   }[state.view];
 }
@@ -263,15 +291,19 @@ function content() {
     instructors: instructorsView(),
     students: students(),
     classes: classesView(),
+    groups: groupsView(),
     assignments: assignmentsView(),
+    grades: gradesView(),
     materials: materialsView(),
     attendance: attendanceView(),
+    chat: chatView(),
     staffRequests: staffRequestsView(),
     reports: reportsView(),
     accounts: accountsView(),
     leads: leadsView(),
     reviews: reviewsView(),
     opportunities: opportunitiesView(),
+    profile: profileView(),
     settings: settingsView(),
   }[state.view] || dashboard();
 }
@@ -615,8 +647,9 @@ function classesView() {
 }
 
 function assignmentsView() {
+  const canAdd = canManageAssignments(state.role);
   return `
-    <div class="toolbar"><button onclick="openModal('addAssignment')">New assignment</button></div>
+    ${canAdd ? `<div class="toolbar"><button onclick="openModal('addAssignment')">New assignment</button></div>` : ""}
     ${assignmentPanel()}
   `;
 }
@@ -633,6 +666,474 @@ function assignmentPanel() {
       </table>
     </section>
   `;
+}
+
+// ---------------------------------------------------------------------
+// Groups: every role reaches the same underlying `groups`/`group_members`
+// data (already scoped by RLS at fetch time — see 0006 and 0008's
+// can_view_group()), but Staff manages group membership per class while
+// a Student/Parent just sees which group(s) they/their child belong to.
+// ---------------------------------------------------------------------
+
+function groupsView() {
+  const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
+
+  if (isStaff) {
+    const viewerClasses = classesForViewer();
+    return `
+      <div class="class-grid">
+        ${
+          viewerClasses
+            .map((item) => {
+              const classGroups = groupsInClass(item.id);
+              return `
+                <article class="panel class-tile">
+                  <div class="panel-head"><h2>${escapeHtml(item.name)}</h2>${badge(`${classGroups.length} group${classGroups.length === 1 ? "" : "s"}`)}</div>
+                  ${
+                    classGroups.length
+                      ? `<ul class="m-compare-list">${classGroups
+                          .map((g) => {
+                            const memberCount = groupMembers.filter((m) => m.groupId === g.id).length;
+                            return `<li>${escapeHtml(g.name)} · ${memberCount} student${memberCount === 1 ? "" : "s"}</li>`;
+                          })
+                          .join("")}</ul>`
+                      : `<p class="empty">No groups yet.</p>`
+                  }
+                  <button onclick="openModal('addGroup', { classId: '${escapeJs(item.id)}' })">Manage groups</button>
+                </article>
+              `;
+            })
+            .join("") || `<p class="empty">No classes yet.</p>`
+        }
+      </div>
+    `;
+  }
+
+  const student = people.students[0];
+  if (!student) return emptyState("No student record is linked to your account yet.");
+  const myGroups = groups.filter((group) =>
+    groupMembers.some((member) => member.groupId === group.id && member.studentId === student.id),
+  );
+  return `
+    <div class="class-grid">
+      ${
+        myGroups
+          .map((group) => {
+            const members = groupMembers
+              .filter((m) => m.groupId === group.id)
+              .map((m) => people.students.find((s) => s.id === m.studentId))
+              .filter(Boolean);
+            return `
+              <article class="panel class-tile">
+                <div class="panel-head"><h2>${escapeHtml(group.name)}</h2></div>
+                <p>${escapeHtml(className(group.classId))}</p>
+                <dl><div><dt>Members</dt><dd>${members.length}</dd></div></dl>
+                <ul class="m-compare-list">${members.map((m) => `<li>${escapeHtml(fullName(m))}${m.id === student.id ? " (you)" : ""}</li>`).join("")}</ul>
+              </article>
+            `;
+          })
+          .join("") || `<p class="empty">You're not part of a group yet — ask your instructor.</p>`
+      }
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------------
+// Grades: Staff see a gradebook (one row per assignment, "Grade" opens a
+// roster-style entry modal — same pattern as attendance). A Student sees
+// only their own grades; a Parent sees their linked child's — both are
+// already the only rows RLS will ever return them (see the "grades
+// scoped read" policy in 0010_grades_and_chat.sql), this view just
+// presents them.
+// ---------------------------------------------------------------------
+
+function gradesView() {
+  const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
+
+  if (isStaff) {
+    return `
+      <section class="panel table-panel">
+        <div class="panel-head"><h2>Gradebook</h2><span>${assignments.length} assignments</span></div>
+        <table>
+          <thead><tr><th>Assignment</th><th>Class</th><th>Due</th><th>Graded</th><th></th></tr></thead>
+          <tbody>
+            ${
+              assignments
+                .map((a) => {
+                  const cls = classes.find((c) => c.name === a.className);
+                  const roster = cls ? studentsInClass(cls.id) : [];
+                  const gradedCount = grades.filter((g) => g.assignmentId === a.id).length;
+                  return `<tr><td><strong>${escapeHtml(a.title)}</strong></td><td>${escapeHtml(a.className)}</td><td>${a.due}</td><td>${gradedCount}/${roster.length}</td><td>${a.id ? `<button onclick="openModal('gradeStudent', { assignmentId: '${escapeJs(a.id)}' })">Grade</button>` : ""}</td></tr>`;
+                })
+                .join("") || `<tr><td colspan="5" class="empty">No assignments yet.</td></tr>`
+            }
+          </tbody>
+        </table>
+      </section>
+    `;
+  }
+
+  const student = people.students[0];
+  if (!student) return emptyState("No student record is linked to your account yet.");
+  const own = grades.filter((g) => g.studentId === student.id);
+  return `
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>${state.role === "Parent" ? `${escapeHtml(fullName(student))}'s Grades` : "Your Grades"}</h2><span>${own.length} graded</span></div>
+      <table>
+        <thead><tr><th>Assignment</th><th>Class</th><th>Score</th><th>Feedback</th></tr></thead>
+        <tbody>
+          ${
+            own
+              .map((g) => {
+                const a = assignments.find((item) => item.id === g.assignmentId);
+                return `<tr><td><strong>${a ? escapeHtml(a.title) : "Assignment"}</strong></td><td>${a ? escapeHtml(a.className) : "—"}</td><td>${g.score}/${g.maxScore}</td><td>${g.feedback ? escapeHtml(g.feedback) : "—"}</td></tr>`;
+              })
+              .join("") || `<tr><td colspan="4" class="empty">No grades yet.</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+function gradeStudentModal(modal) {
+  const assignment = assignments.find((a) => a.id === modal.assignmentId);
+  if (!assignment) {
+    return `
+      <h2>Grade assignment</h2>
+      <p class="hint">This assignment couldn't be found — it may have just been removed.</p>
+      <div class="modal-actions"><button type="button" onclick="closeModal()">Close</button></div>
+    `;
+  }
+  const cls = classes.find((c) => c.name === assignment.className);
+  const roster = cls ? studentsInClass(cls.id) : [];
+  return `
+    <h2>Grade — ${escapeHtml(assignment.title)}</h2>
+    <p class="hint">${escapeHtml(assignment.className)} · out of ${assignment.maxGrade} pts</p>
+    ${modalMessages()}
+    <form onsubmit="handleSaveGrade(event, '${escapeJs(assignment.id)}')">
+      ${gradeRosterRows(assignment, roster)}
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Save grades"}</button>
+      </div>
+    </form>
+  `;
+}
+
+function gradeRosterRows(assignment, roster) {
+  if (!roster.length) return `<p class="hint">No students in this class yet.</p>`;
+  return `
+    <fieldset class="modal-checklist">
+      <legend>Enter each student's score</legend>
+      ${roster
+        .map((student) => {
+          const existing = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
+          return `
+            <div class="attendance-row">
+              <span>${escapeHtml(fullName(student))}</span>
+              <input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="Score" />
+            </div>
+          `;
+        })
+        .join("")}
+    </fieldset>
+  `;
+}
+
+async function handleSaveGrade(event, assignmentId) {
+  event.preventDefault();
+  const form = event.target;
+  const assignment = assignments.find((a) => a.id === assignmentId);
+  const maxScore = assignment?.maxGrade || 100;
+  const inputs = [...form.querySelectorAll("input[data-student-id]")];
+  const rows = inputs
+    .filter((input) => input.value !== "")
+    .map((input) => ({
+      assignment_id: assignmentId,
+      student_id: input.dataset.studentId,
+      score: Number(input.value),
+      max_score: maxScore,
+    }));
+  if (!rows.length) {
+    state.modalError = "Enter at least one score before saving.";
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseUpsert("grades", rows, "assignment_id,student_id");
+    await refreshAfterWrite();
+    closeModal();
+    navigate("grades");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || "Could not save grades. Please try again.";
+    render();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Class chat: one shared thread per class (see can_access_class_chat() in
+// 0010_grades_and_chat.sql). Messages aren't part of the eager
+// loadFromSupabase() batch — they're loaded per-class, on demand, and
+// refreshed on a short interval only while the Chat tab is actually open
+// (see enterChatView/startChatPolling/stopChatPolling below and their
+// hook in navigate()), so nobody pays for a poll they can't see.
+// ---------------------------------------------------------------------
+
+function chatClassesForViewer() {
+  if (["Super Admin", "School Admin", "Instructor"].includes(state.role)) return classesForViewer();
+  const student = people.students[0];
+  if (!student) return [];
+  const cls = classes.find((c) => c.id === student.classId);
+  return cls ? [cls] : [];
+}
+
+function chatView() {
+  const availableClasses = chatClassesForViewer();
+  if (!availableClasses.length) {
+    return emptyState("No class chat is available yet.");
+  }
+  if (!state.chatClassId || !availableClasses.some((c) => c.id === state.chatClassId)) {
+    state.chatClassId = availableClasses[0].id;
+  }
+  const activeClass = availableClasses.find((c) => c.id === state.chatClassId);
+  const classMessages = chatMessages
+    .filter((m) => m.classId === state.chatClassId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const canModerate = ["Super Admin", "School Admin"].includes(state.role);
+  const viewerName = state.profile?.full_name || "";
+
+  return `
+    <section class="panel chat-panel">
+      <div class="panel-head">
+        <h2>${escapeHtml(activeClass?.name || "Class chat")}</h2>
+        ${
+          availableClasses.length > 1
+            ? `<select onchange="setChatClass(this.value)">
+                ${availableClasses.map((c) => `<option value="${c.id}" ${c.id === state.chatClassId ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
+              </select>`
+            : ""
+        }
+      </div>
+      ${state.chatError ? `<p class="notice-row auth-error">${escapeHtml(state.chatError)}</p>` : ""}
+      <div class="chat-thread" id="chat-thread">
+        ${
+          classMessages.length
+            ? classMessages
+                .map(
+                  (m) => `
+                  <div class="chat-message ${m.senderName === viewerName && m.senderRole === state.role ? "chat-message-own" : ""}">
+                    <div class="chat-message-meta"><strong>${escapeHtml(m.senderName)}</strong><span>${escapeHtml(roleLabel(m.senderRole))} · ${new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+                    <p>${escapeHtml(m.body)}</p>
+                    ${canModerate ? `<button type="button" class="chat-delete" onclick="deleteMessage('${escapeJs(m.id)}')" aria-label="Delete message">&times;</button>` : ""}
+                  </div>
+                `,
+                )
+                .join("")
+            : `<p class="empty">No messages yet — say hello!</p>`
+        }
+      </div>
+      <form class="chat-composer" onsubmit="handleSendMessage(event)">
+        <input type="text" name="body" placeholder="Message the class…" maxlength="3900" required autocomplete="off" />
+        <button type="submit" ${state.chatSendBusy ? "disabled" : ""}>${state.chatSendBusy ? "Sending…" : "Send"}</button>
+      </form>
+    </section>
+  `;
+}
+
+function setChatClass(classId) {
+  state.chatClassId = classId;
+  renderContentOnly();
+  loadChatMessages(classId).then(renderContentOnly);
+}
+
+function enterChatView() {
+  const availableClasses = chatClassesForViewer();
+  if (!availableClasses.length) return;
+  if (!state.chatClassId || !availableClasses.some((c) => c.id === state.chatClassId)) {
+    state.chatClassId = availableClasses[0].id;
+  }
+  loadChatMessages(state.chatClassId).then(renderContentOnly);
+  startChatPolling();
+}
+
+function startChatPolling() {
+  stopChatPolling();
+  chatPollTimer = setInterval(() => {
+    if (state.view !== "chat" || !state.chatClassId) return;
+    loadChatMessages(state.chatClassId, { silent: true }).then(renderContentOnly);
+  }, 4000);
+}
+
+function stopChatPolling() {
+  if (chatPollTimer) {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
+  }
+}
+
+async function loadChatMessages(classId, opts = {}) {
+  if (!hasSupabaseConfig() || !state.session || !classId) return;
+  if (!opts.silent) {
+    state.chatBusy = true;
+    state.chatError = "";
+  }
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  try {
+    const response = await fetch(
+      `${base}/rest/v1/messages?class_id=eq.${encodeURIComponent(classId)}&select=*&order=created_at.asc`,
+      {
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${state.session.access_token}`,
+          Accept: "application/json",
+        },
+      },
+    );
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const rows = await response.json();
+    chatMessages = chatMessages
+      .filter((m) => m.classId !== classId)
+      .concat(
+        rows.map((m) => ({
+          id: m.id,
+          classId: m.class_id,
+          senderUserId: m.sender_user_id,
+          senderName: m.sender_name,
+          senderRole: m.sender_role,
+          body: m.body,
+          createdAt: m.created_at,
+        })),
+      );
+  } catch {
+    if (!opts.silent) state.chatError = "Couldn't load messages right now.";
+  } finally {
+    if (!opts.silent) state.chatBusy = false;
+  }
+}
+
+async function handleSendMessage(event) {
+  event.preventDefault();
+  const form = event.target;
+  const body = form.body.value.trim();
+  const classId = state.chatClassId;
+  if (!body || !classId) return;
+  state.chatSendBusy = true;
+  state.chatError = "";
+  renderContentOnly();
+  try {
+    await supabaseInsert("messages", [
+      {
+        class_id: classId,
+        sender_user_id: state.session.user.id,
+        sender_name: state.profile?.full_name || "",
+        sender_role: state.role,
+        body,
+      },
+    ]);
+    form.reset();
+    await loadChatMessages(classId);
+  } catch (error) {
+    state.chatError = error.message || "Could not send your message.";
+  } finally {
+    state.chatSendBusy = false;
+    renderContentOnly();
+    const thread = document.getElementById("chat-thread");
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }
+}
+
+async function deleteMessage(id) {
+  if (!window.confirm("Delete this message? This can't be undone.")) return;
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    await fetch(`${base}/rest/v1/messages?id=eq.${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+      },
+    });
+    chatMessages = chatMessages.filter((m) => m.id !== id);
+    renderContentOnly();
+  } catch {
+    state.chatError = "Could not delete that message.";
+    renderContentOnly();
+  }
+}
+
+// ---------------------------------------------------------------------
+// Profile: every signed-in role's own account info, plus a voluntary
+// password change any time (not just the forced first-login flow — see
+// handleForcePasswordSubmit for that one). Reuses the exact same
+// authChangePassword() + mark_password_changed call.
+// ---------------------------------------------------------------------
+
+function profileView() {
+  const viewerName = state.profile?.full_name || state.session?.user?.email || roleLabel(state.role);
+  const email = state.session?.user?.email || "—";
+  const student = state.role === "Student" ? people.students[0] : null;
+  const initials = viewerName.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase() || "?";
+  return `
+    <div class="profile-hero compact">
+      <div class="avatar">${escapeHtml(initials)}</div>
+      <div><h2>${escapeHtml(viewerName)}</h2><span>${escapeHtml(roleLabel(state.role))}${student ? ` · ${escapeHtml(student.level || "")}` : ""}</span></div>
+    </div>
+    <section class="panel">
+      <div class="panel-head"><h2>Account details</h2></div>
+      <dl>
+        <div><dt>Email</dt><dd>${escapeHtml(email)}</dd></div>
+        <div><dt>Role</dt><dd>${escapeHtml(roleLabel(state.role))}</dd></div>
+        ${student ? `<div><dt>Class</dt><dd>${escapeHtml(className(student.classId))}</dd></div>` : ""}
+      </dl>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Change password</h2></div>
+      ${state.profileError ? `<p class="notice-row auth-error">${escapeHtml(state.profileError)}</p>` : ""}
+      ${state.profileNotice ? `<p class="notice-row m-success">${escapeHtml(state.profileNotice)}</p>` : ""}
+      <form onsubmit="handleChangePassword(event)">
+        <label>New password<input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></label>
+        <label>Confirm new password<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></label>
+        <div class="modal-actions">
+          <button type="submit" ${state.profileBusy ? "disabled" : ""}>${state.profileBusy ? "Saving…" : "Update password"}</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+async function handleChangePassword(event) {
+  event.preventDefault();
+  const form = event.target;
+  const next = form.newPassword.value;
+  const confirmValue = form.confirmPassword.value;
+  state.profileError = "";
+  state.profileNotice = "";
+  if (next.length < 8) {
+    state.profileError = "Choose a password with at least 8 characters.";
+    renderContentOnly();
+    return;
+  }
+  if (next !== confirmValue) {
+    state.profileError = "Passwords do not match.";
+    renderContentOnly();
+    return;
+  }
+  state.profileBusy = true;
+  renderContentOnly();
+  try {
+    await authChangePassword(config, state.session.access_token, next);
+    state.profileNotice = "Your password has been updated.";
+    form.reset();
+  } catch (error) {
+    state.profileError = error.message || "Could not update your password.";
+  } finally {
+    state.profileBusy = false;
+    renderContentOnly();
+  }
 }
 
 function attendanceView() {
@@ -933,7 +1434,7 @@ async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   const failures = [];
-  const TOTAL_TABLES = 10; // must match the number of safeSelect(...) calls below
+  const TOTAL_TABLES = 11; // must match the number of safeSelect(...) calls below
   const safeSelect = (table, select = "*") =>
     supabaseSelect(table, select, token).catch((error) => {
       failures.push({ table, message: error.message || String(error) });
@@ -952,6 +1453,7 @@ async function loadFromSupabase(token) {
       materialRows,
       attendanceRows,
       staffRequestRows,
+      gradeRows,
     ] = await Promise.all([
       safeSelect("school_settings"),
       safeSelect("students"),
@@ -963,6 +1465,7 @@ async function loadFromSupabase(token) {
       safeSelect("materials"),
       safeSelect("attendance_records"),
       safeSelect("staff_requests"),
+      safeSelect("grades"),
     ]);
 
     const settings = settingsRows ? settingsRows[0] : null;
@@ -1020,6 +1523,7 @@ async function loadFromSupabase(token) {
     }));
 
     assignments = assignmentRows === null ? assignments : assignmentRows.map((assignment) => ({
+      id: assignment.id,
       title: assignment.title,
       course: assignment.course,
       className: assignment.class_name,
@@ -1079,22 +1583,38 @@ async function loadFromSupabase(token) {
           }))
           .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+    grades = gradeRows === null ? grades : gradeRows.map((grade) => ({
+      id: grade.id,
+      assignmentId: grade.assignment_id,
+      studentId: grade.student_id,
+      score: grade.score,
+      maxScore: grade.max_score,
+      feedback: grade.feedback,
+      updatedAt: grade.updated_at,
+    }));
+
+    // Keeping this in plain, friendly language on purpose — dataSource.label
+    // and .status are shown directly in the sidebar and top bar, so nothing
+    // here should read like a developer log. The technical breakdown (which
+    // table failed and why) still goes into dataSource.error, which is never
+    // rendered anywhere in the UI — it's there only if someone inspects the
+    // app from the browser console while troubleshooting.
     if (failures.length === 0) {
-      dataSource.label = "Supabase connected";
-      dataSource.status = "Live data loaded from Supabase";
+      dataSource.label = "Live";
+      dataSource.status = "Your school's data is up to date.";
       dataSource.error = "";
     } else {
       const failedTables = failures.map((item) => item.table).join(", ");
-      dataSource.label = failures.length === TOTAL_TABLES ? "Demo fallback" : "Partially loaded";
+      dataSource.label = failures.length === TOTAL_TABLES ? "Offline" : "Partially loaded";
       dataSource.status =
         failures.length === TOTAL_TABLES
-          ? "Supabase unavailable, showing the last data loaded successfully."
-          : `Everything loaded except: ${failedTables} (showing the last data loaded successfully for those).`;
+          ? "We couldn't reach your school's live data — showing the last data loaded successfully."
+          : "Most of your school's data is up to date — a few sections are showing the last data loaded successfully.";
       dataSource.error = failures.map((item) => `${item.table}: ${item.message}`).join(" · ");
     }
   } catch (error) {
-    dataSource.label = "Demo fallback";
-    dataSource.status = "Supabase unavailable, using sample data";
+    dataSource.label = "Offline";
+    dataSource.status = "We couldn't reach your school's live data right now.";
     dataSource.error = error.message;
   }
 }
@@ -1212,6 +1732,8 @@ function modalBody(modal) {
       return addAssignmentModal();
     case "takeAttendance":
       return addAttendanceModal();
+    case "gradeStudent":
+      return gradeStudentModal(modal);
     case "addStaffRequest":
       return addStaffRequestModal();
     case "addOpportunity":
@@ -1543,7 +2065,7 @@ async function handleTakeAttendance(event) {
     navigate("attendance");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not save attendance. Has migration 0007 been run yet?";
+    state.modalError = error.message || "Could not save attendance. Please try again in a moment.";
     render();
   }
 }
@@ -1652,7 +2174,7 @@ async function handleAddStaffRequest(event) {
     navigate("staffRequests");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not send this. Has migration 0009 been run yet?";
+    state.modalError = error.message || "Could not send this. Please try again in a moment.";
     render();
   }
 }
@@ -2178,19 +2700,55 @@ function authLoadingScreen() {
 }
 
 function loginScreen() {
+  if (!state.loginMode) return loginChooserScreen();
+  const isStudent = state.loginMode === "student";
   return `
-    <div class="auth-screen">
+    <div class="auth-screen auth-screen-${state.loginMode}">
+      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
       <form class="auth-card" onsubmit="handleLoginSubmit(event)">
-        <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
+        <button type="button" class="auth-back" onclick="backToLoginChooser()">&larr; Back</button>
         <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+        <span class="auth-audience-tag">${isStudent ? "Student & Family Portal" : "Staff Portal"}</span>
         <h1>${school.name}</h1>
-        <p class="eyebrow">Sign in to your portal</p>
+        <p class="eyebrow">${isStudent ? "Sign in to see your classes, grades, and chat" : "Sign in to manage your school"}</p>
         ${state.authError ? `<p class="auth-error">${state.authError}</p>` : ""}
         <label>Username (email)<input type="email" name="email" autocomplete="username" required autofocus /></label>
         <label>Password<input type="password" name="password" autocomplete="current-password" required /></label>
         <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? "Signing in…" : "Sign in"}</button>
-        <small>Lost your credentials? Ask your manager or instructor to issue or reset them from Accounts &amp; Logins.</small>
+        <small>Lost your credentials? Ask your ${isStudent ? "instructor or school" : "manager or instructor"} to issue or reset them${isStudent ? "" : " from Accounts &amp; Logins"}.</small>
       </form>
+    </div>
+  `;
+}
+
+// Two audiences, two tiles — a Student/Parent never has to look at a form
+// meant for staff (and vice versa) before choosing who they are. Signing
+// in itself is unchanged underneath: the same email + password submit
+// either way, and the account's real role (decided by user_profiles /
+// RLS) is what actually determines what they can see next — this is only
+// which welcome screen and copy they see on the way in.
+function loginChooserScreen() {
+  return `
+    <div class="auth-screen auth-chooser">
+      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
+      <div class="auth-chooser-card">
+        <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+        <h1>${school.name}</h1>
+        <p class="eyebrow">Who's signing in?</p>
+        <div class="auth-chooser-grid">
+          <button type="button" class="auth-chooser-tile auth-chooser-student" onclick="chooseLoginMode('student')">
+            <span class="auth-chooser-icon" aria-hidden="true">🎓</span>
+            <strong>Student &amp; Family</strong>
+            <span>Students and parents — see classes, grades, chat, and more</span>
+          </button>
+          <button type="button" class="auth-chooser-tile auth-chooser-staff" onclick="chooseLoginMode('staff')">
+            <span class="auth-chooser-icon" aria-hidden="true">🏫</span>
+            <strong>Staff</strong>
+            <span>Instructors and managers — run classes and school operations</span>
+          </button>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -2202,8 +2760,8 @@ function notConfiguredScreen() {
         <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
         <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
         <h1>Almost there</h1>
-        <p class="eyebrow">This portal isn't connected to a database yet</p>
-        <p>${school.name} hasn't been connected to Supabase yet, so there's no sign-in to show. If you're setting this school up, follow <code>docs/deploy-vercel-supabase.md</code> to create the Supabase project, run the migrations, and add the environment variables in Vercel — then this button will take visitors to a real sign-in screen.</p>
+        <p class="eyebrow">This portal isn't finished setting up yet</p>
+        <p>${school.name}'s portal hasn't been fully set up yet, so there's no sign-in to show. If you're setting this school up, see <code>docs/deploy-vercel-supabase.md</code> for the setup steps — once that's done, this button will take visitors to a real sign-in screen.</p>
       </div>
     </div>
   `;
@@ -2329,6 +2887,7 @@ function opportunityDetailScreen(op) {
           <strong>${escapeHtml(school.name)}</strong>
         </div>
         <div class="m-nav-social">${socialLinksHtml()}</div>
+        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
         <button class="m-login-button" onclick="beginLogin()">Login</button>
       </header>
 
@@ -2423,6 +2982,7 @@ function marketingScreen() {
           <a href="#contact">Contact</a>
         </nav>
         <div class="m-nav-social">${socialLinksHtml()}</div>
+        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
         <button class="m-login-button" onclick="beginLogin()">Login</button>
       </header>
 
@@ -2591,12 +3151,26 @@ function openPromoForm() {
 function beginLogin() {
   state.authMode = hasSupabaseConfig() ? "signed-out" : "not-configured";
   state.authError = "";
+  state.loginMode = null;
   state.view = "dashboard";
   render();
 }
 
 function backToMarketing() {
   state.authMode = "marketing";
+  state.authError = "";
+  state.loginMode = null;
+  render();
+}
+
+function chooseLoginMode(mode) {
+  state.loginMode = mode;
+  state.authError = "";
+  render();
+}
+
+function backToLoginChooser() {
+  state.loginMode = null;
   state.authError = "";
   render();
 }
@@ -3110,7 +3684,7 @@ async function handleAddOpportunity(event) {
     navigate("opportunities");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not add this opportunity. Has migration 0009 been run yet?";
+    state.modalError = error.message || "Could not add this opportunity. Please try again in a moment.";
     render();
   }
 }
@@ -3648,6 +4222,14 @@ window.removeOpportunity = removeOpportunity;
 window.dismissOpportunitiesNotice = dismissOpportunitiesNotice;
 window.openOpportunityDetail = openOpportunityDetail;
 window.closeOpportunityDetail = closeOpportunityDetail;
+window.toggleTheme = toggleTheme;
+window.chooseLoginMode = chooseLoginMode;
+window.backToLoginChooser = backToLoginChooser;
+window.handleSaveGrade = handleSaveGrade;
+window.setChatClass = setChatClass;
+window.handleSendMessage = handleSendMessage;
+window.deleteMessage = deleteMessage;
+window.handleChangePassword = handleChangePassword;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -3674,7 +4256,51 @@ window.addEventListener(
   { passive: true },
 );
 
+// ---------------------------------------------------------------------
+// Light / dark mode. Applied via a `data-theme` attribute on <html> (see
+// styles.css's `[data-theme="dark"]` block) so it works before any
+// signed-in state exists — the marketing page, the login screens, and
+// the dashboard all pick it up the same way. The choice is remembered
+// per-browser (falls back to the OS preference the first time, then to
+// light) — never something that needs a server round-trip.
+// ---------------------------------------------------------------------
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+}
+
+function initTheme() {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("codenest-theme");
+  } catch {
+    saved = null;
+  }
+  if (saved !== "dark" && saved !== "light") {
+    try {
+      saved = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch {
+      saved = "light";
+    }
+  }
+  state.theme = saved;
+  applyTheme(saved);
+}
+
+function toggleTheme() {
+  state.theme = state.theme === "dark" ? "light" : "dark";
+  applyTheme(state.theme);
+  try {
+    localStorage.setItem("codenest-theme", state.theme);
+  } catch {
+    // Private browsing / storage blocked — the toggle still works for
+    // the rest of this visit, it just won't be remembered next time.
+  }
+  render();
+}
+
 async function initApp() {
+  initTheme();
   render();
   loadPublicReviews().then(() => {
     if (state.authMode === "marketing") render();
