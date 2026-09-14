@@ -1,12 +1,33 @@
 # Security Test Report
 
-Date: 2026-09-10
+Date: 2026-09-14
 
 ## Result
 
-Passed: 26 / 26 automated tests.
+Passed: 26 / 26 automated tests, plus a live-executed SQL/RLS verification pass covering every table and role (see below). No bugs found; no code changes were needed this round.
 
-## Latest Update: Customer-Facing Redesign (Reviews, Comparison), Full Re-Audit, and a Site-Wide Color/Visual Pass
+## Latest Update: Full Live SQL/RLS Verification — Every Query, Every Role, Executed Against a Real Postgres
+
+Requested this round: make sure every button, every piece of logic, and every SQL query is correct, and that the dashboard is genuinely ready to use. Previous rounds verified this mostly by reading the code and running the 26 static/regex-based automated tests. This round went further: every migration and every query was actually **executed** against a real, freshly-bootstrapped PostgreSQL 16 database with a faithful Supabase shim (`auth.uid()`, `anon`/`authenticated`/`service_role` roles, RLS enabled) — not just read.
+
+**1. Full migration replay.** Ran all 9 migrations (`0001` through `0009`) in order against a completely empty database. All applied with zero errors, producing the exact 19-table schema the app expects (including `opportunities`, added by `0009`). This confirms the migration chain is internally consistent and would set up a brand-new Supabase project correctly in one pass.
+
+**2. Every query cross-checked against the real schema.** Extracted every single `/rest/v1/...` call in `src/app.js` (all `select=`, insert bodies, PATCH bodies, filters — both the shared `supabaseSelect`/`supabaseInsert`/`supabaseUpsert` helpers and every direct `fetch()`) plus every query in `api/create-account.js` and `api/remove-account.js`, and checked each table and column name against the schema produced in step 1. Also checked every literal status/kind value the app writes (`"Active"`, `"present"`, `"removal"`, `"open"`, etc.) against the matching `check` constraint. Zero mismatches — every query is well-formed and would run cleanly.
+
+**3. Live RLS simulation, every role.** Seeded realistic fixture data (2 instructors with separate classes, 2 students, a parent linked to one child, staff requests, attendance, reviews, opportunities) and ran real SQL as each role (`anon`, Manager, two different Instructors, two different Students, a Parent), using the same `set role` / JWT-claim technique PostgREST itself uses. Confirmed, by actually running the queries and checking the row counts/errors:
+  - An anonymous visitor sees only `open` opportunities and only `approved` reviews, can insert a `pending` review but is rejected if the insert tries to sneak in `approved`, and sees zero rows of `students`/`instructors`/`classes`/`staff_requests`/`user_profiles`.
+  - A Manager sees and can write everything.
+  - Instructor A sees and can only write attendance for their own class's own student — reading or writing Instructor B's class is rejected. Instructor A cannot delete a student, cannot write to `opportunities`, and cannot approve/deny a staff request (each attempt affects 0 rows or is rejected outright).
+  - An Instructor cannot submit a student-removal request for a student outside their own class (rejected), can for one of their own students (accepted), and cannot impersonate another instructor's name on a request (rejected).
+  - A Student sees only their own row; cannot edit their own grade.
+  - A Parent sees only their linked child, not other students.
+  - A Manager deleting a student correctly cascades — the student's `attendance_records` and `parent_student_links` rows are gone immediately, no orphaned data left behind.
+
+**4. Client-side re-audit.** Re-ran the handler/form/dead-link/TODO audit on the current code: 0 orphaned `onclick`/`onsubmit`/`onchange`/`oninput` handlers, every `<form>` has `onsubmit`, no dead `href="#"` links, no leftover `TODO`/`FIXME`. All 26 automated tests pass; `npm run build` succeeds.
+
+**Bottom line:** the code, the schema, and the access-control logic are all verified correct — this is as close to "fully functional" as it's possible to confirm without touching the live Supabase project itself. The one thing that can only be confirmed on your end: whether migration `0009` and `supabase/seed.sql` have actually been run against your **live** Supabase project. Everything above proves the code is right; it can't prove your live database is up to date. See the README's Supabase setup section for the exact migration order.
+
+## Earlier Update: Customer-Facing Redesign (Reviews, Comparison), Full Re-Audit, and a Site-Wide Color/Visual Pass
 
 Requested this round: a less pushy way to leave a review, a comparison section that isn't a bare table, a strict re-check of every tab's buttons and logic, and an overall color/visual polish pass on the dashboard. None of this touched the RLS/schema layer — no new migration — so it's a pure client-side (`src/app.js`, `src/styles.css`) change.
 
