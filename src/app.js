@@ -1,12 +1,15 @@
 import {
   canAccessModule,
+  canAddExistingStudentToGroup,
   canCreateGroups,
   canCreateInstructorProfiles,
   canCreateStudentProfiles,
-  canManageAssignments,
+  canEditInstructorProfiles,
+  canEditStudent,
   canManageGroup,
   canManageOpportunities,
   canRemoveAccounts,
+  canRemoveGroups,
   filterStudentsForViewer,
   roleLabel,
   safeSearchRowsForViewer,
@@ -93,7 +96,6 @@ const navItems = [
   ["instructors", "nav.instructors", "users"],
   ["students", "nav.students", "users"],
   ["groups", "nav.groups", "layers"],
-  ["assignments", "nav.assignments", "clipboard"],
   ["grades", "nav.grades", "chart"],
   ["chat", "nav.chat", "message"],
   ["staffRequests", "nav.staffRequests", "message"],
@@ -285,7 +287,6 @@ function titleForView() {
     students: t("students.title"),
     groups: isStaff ? t("groups.title") : t("groups.mine.title"),
     groupDetail: selectedGroup ? escapeHtml(selectedGroup.name) : t("groups.title"),
-    assignments: t("assignments.title"),
     grades: isStaff ? t("nav.gradebook") : t("grades.title"),
     chat: t("chat.title"),
     staffRequests: isManager ? t("requests.title") : t("requests.titleMine"),
@@ -307,7 +308,6 @@ function content() {
     students: students(),
     groups: groupsView(),
     groupDetail: groupDetailView(),
-    assignments: assignmentsView(),
     grades: gradesView(),
     chat: chatView(),
     staffRequests: staffRequestsView(),
@@ -402,7 +402,7 @@ function recentAssignmentsPanel() {
   const recent = [...assignments].sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 6);
   return `
     <section class="panel">
-      <div class="panel-head"><h2>${t("dashboard.recentAssignments")}</h2><button onclick="navigate('assignments')">${t("common.open")}</button></div>
+      <div class="panel-head"><h2>${t("dashboard.recentAssignments")}</h2><button onclick="navigate('groups')">${t("common.open")}</button></div>
       ${recent.map((a) => `<div class="report-row"><span>${escapeHtml(a.title)} · ${escapeHtml(groupName(a.groupId))}</span><strong>${badge(a.status)}</strong></div>`).join("") || `<p class="empty">${t("dashboard.noAssignmentsYet")}</p>`}
     </section>
   `;
@@ -572,6 +572,7 @@ function exportStudentsCsv() {
 function studentProfile(student) {
   if (!student) return `<section class="panel"><p class="empty">${t("students.noSelection")}</p></section>`;
   const canRemove = canRemoveAccounts(state.role);
+  const canEdit = canEditStudent(currentViewer(), student);
   const removeKey = `remove-student-${student.id}`;
   const removeBusy = state.accountsBusy === removeKey;
   return `
@@ -586,7 +587,10 @@ function studentProfile(student) {
         <div><dt>${t("students.profile.level")}</dt><dd>${escapeHtml(student.level) || "—"}</dd></div>
         <div><dt>${t("students.profile.notes")}</dt><dd>${escapeHtml(student.notes) || "—"}</dd></div>
       </dl>
-      ${canRemove ? `<div class="toolbar"><button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("students.profile.removeStudent")}</button></div>` : ""}
+      <div class="toolbar">
+        ${canEdit ? `<button onclick="openModal('editStudent', { studentId: '${escapeJs(student.id)}' })">${t("common.edit")}</button>` : ""}
+        ${canRemove ? `<button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("students.profile.removeStudent")}</button>` : ""}
+      </div>
     </section>
   `;
 }
@@ -696,6 +700,9 @@ function groupDetailView() {
   if (!group) return emptyState(t("groups.notFound"));
   const viewer = currentViewer();
   const manage = canManageGroup(viewer, group);
+  const canRemove = canRemoveGroups(state.role);
+  const canAddExisting = canAddExistingStudentToGroup(state.role);
+  const removeBusy = state.groupActionBusy === group.id;
   const roster = studentsInGroup(group.id);
   const groupMaterials = materials.filter((m) => m.groupId === group.id);
   const recentAttendance = attendanceRecords
@@ -706,8 +713,16 @@ function groupDetailView() {
 
   return `
     <button type="button" class="auth-back" onclick="backToGroups()">${backArrow()} ${t("groups.backToGroups")}</button>
+    ${state.groupActionError ? `<p class="notice-row auth-error">${escapeHtml(state.groupActionError)}</p>` : ""}
     <section class="panel">
-      <div class="panel-head"><h2>${escapeHtml(group.name)}</h2>${badge(group.status)}</div>
+      <div class="panel-head">
+        <h2>${escapeHtml(group.name)}</h2>
+        <div class="toolbar">
+          ${badge(group.status)}
+          ${manage ? `<button onclick="openModal('editGroup', { groupId: '${escapeJs(group.id)}' })">${t("common.edit")}</button>` : ""}
+          ${canRemove ? `<button onclick="handleRemoveGroup('${escapeJs(group.id)}', '${escapeJs(group.name)}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("groups.remove")}</button>` : ""}
+        </div>
+      </div>
       <dl>
         <div><dt>${t("groups.course")}</dt><dd>${escapeHtml(group.course)}</dd></div>
         <div><dt>${t("groups.instructor")}</dt><dd>${escapeHtml(group.instructor) || t("common.unassigned")}</dd></div>
@@ -717,7 +732,14 @@ function groupDetailView() {
       ${chartRow(t("groups.completion"), group.completion)}
     </section>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>${t("groups.members")}</h2><span>${roster.length}</span></div>
+      <div class="panel-head">
+        <h2>${t("groups.members")}</h2>
+        <div class="toolbar">
+          ${manage ? `<button onclick="openModal('addStudent', { groupId: '${escapeJs(group.id)}' })">${t("students.new")}</button>` : ""}
+          ${canAddExisting ? `<button onclick="openModal('addExistingStudent', { groupId: '${escapeJs(group.id)}' })">${t("groups.addExisting.button")}</button>` : ""}
+          <span>${roster.length}</span>
+        </div>
+      </div>
       <table>
         <thead><tr><th>${t("students.table.student")}</th><th>${t("students.table.attendance")}</th><th>${t("students.table.grade")}</th><th>${t("common.status")}</th></tr></thead>
         <tbody>
@@ -729,6 +751,7 @@ function groupDetailView() {
         </tbody>
       </table>
     </section>
+    ${groupAssignmentsSection(group, manage)}
     <section class="panel table-panel">
       <div class="panel-head">
         <h2>${t("materials.title")}</h2>
@@ -792,22 +815,42 @@ function groupAttendanceBySession(records) {
   return [...sessions.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
-function assignmentsView() {
-  const canAdd = canManageAssignments(state.role);
-  return `
-    ${canAdd ? `<div class="toolbar"><button onclick="openModal('addAssignment')">${t("assignments.new")}</button></div>` : ""}
-    ${assignmentPanel()}
-  `;
-}
-
-function assignmentPanel() {
+// There's no standalone Assignments tab anymore — see groupDetailView()'s
+// own Assignments section below, where a group's assignments live now.
+// assignmentPanel() stays as a general "every assignment I can see" table
+// for the admin/instructor/student dashboards (see adminDashboard() /
+// instructorDashboard() / studentDashboard()), which still reasonably
+// want a cross-group summary; it just takes the list to show now instead
+// of always reading the full `assignments` array itself.
+function assignmentPanel(list = assignments) {
   return `
     <section class="panel table-panel">
-      <div class="panel-head"><h2>${t("assignments.panelTitle")}</h2><span>${t("assignments.count", { count: assignments.length })}</span></div>
+      <div class="panel-head"><h2>${t("assignments.panelTitle")}</h2><span>${t("assignments.count", { count: list.length })}</span></div>
       <table>
         <thead><tr><th>${t("assignments.table.assignment")}</th><th>${t("assignments.table.group")}</th><th>${t("assignments.table.due")}</th><th>${t("assignments.table.completion")}</th><th>${t("assignments.table.status")}</th></tr></thead>
         <tbody>
-          ${assignments.map((a) => `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${escapeHtml(groupName(a.groupId))}</td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
+          ${list.map((a) => `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${escapeHtml(groupName(a.groupId))}</td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+// A group's own Assignments section (see groupDetailView()) — the
+// group-column from assignmentPanel()'s table is dropped since every row
+// here is already that one group's.
+function groupAssignmentsSection(group, manage) {
+  const groupAssignments = assignments.filter((a) => a.groupId === group.id);
+  return `
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <h2>${t("assignments.panelTitle")}</h2>
+        ${manage ? `<button onclick="openModal('addAssignment', { groupId: '${escapeJs(group.id)}' })">${t("assignments.new")}</button>` : `<span>${t("assignments.count", { count: groupAssignments.length })}</span>`}
+      </div>
+      <table>
+        <thead><tr><th>${t("assignments.table.assignment")}</th><th>${t("assignments.table.due")}</th><th>${t("assignments.table.completion")}</th><th>${t("assignments.table.status")}</th></tr></thead>
+        <tbody>
+          ${groupAssignments.map((a) => `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
         </tbody>
       </table>
     </section>
@@ -825,26 +868,12 @@ function assignmentPanel() {
 function gradesView() {
   const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
 
+  // One gradebook section per group rather than a single flat table across
+  // every group at once — groupsForViewer() already scopes this to every
+  // group a Manager can see or the ones this Instructor is assigned to.
   if (isStaff) {
-    return `
-      <section class="panel table-panel">
-        <div class="panel-head"><h2>${t("nav.gradebook")}</h2><span>${t("assignments.count", { count: assignments.length })}</span></div>
-        <table>
-          <thead><tr><th>${t("grades.table.assignment")}</th><th>${t("grades.table.group")}</th><th>${t("grades.table.due")}</th><th>${t("grades.table.graded")}</th><th></th></tr></thead>
-          <tbody>
-            ${
-              assignments
-                .map((a) => {
-                  const roster = studentsInGroup(a.groupId);
-                  const gradedCount = grades.filter((g) => g.assignmentId === a.id).length;
-                  return `<tr><td><strong>${escapeHtml(a.title)}</strong></td><td>${escapeHtml(groupName(a.groupId))}</td><td>${a.due || "—"}</td><td>${gradedCount}/${roster.length}</td><td>${a.id ? `<button onclick="openModal('gradeStudent', { assignmentId: '${escapeJs(a.id)}' })">${t("grades.grade")}</button>` : ""}</td></tr>`;
-                })
-                .join("") || `<tr><td colspan="5" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`
-            }
-          </tbody>
-        </table>
-      </section>
-    `;
+    const viewerGroups = groupsForViewer();
+    return viewerGroups.length ? viewerGroups.map((group) => groupGradebookSection(group)).join("") : `<p class="empty">${t("groups.noneYet")}</p>`;
   }
 
   const student = people.students[0];
@@ -863,6 +892,32 @@ function gradesView() {
                 return `<tr><td><strong>${a ? escapeHtml(a.title) : "—"}</strong></td><td>${a ? escapeHtml(groupName(a.groupId)) : "—"}</td><td>${g.score}/${g.maxScore}</td><td>${g.feedback ? escapeHtml(g.feedback) : "—"}</td></tr>`;
               })
               .join("") || `<tr><td colspan="4" class="empty">${t("grades.noneYet")}</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+// One group's slice of the staff gradebook (see gradesView() above) — same
+// row shape the old flat table used, minus the now-redundant "Group"
+// column, since every row here is already that one group's.
+function groupGradebookSection(group) {
+  const groupAssignments = assignments.filter((a) => a.groupId === group.id);
+  const roster = studentsInGroup(group.id);
+  return `
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>${escapeHtml(group.name)}</h2><span>${t("assignments.count", { count: groupAssignments.length })}</span></div>
+      <table>
+        <thead><tr><th>${t("grades.table.assignment")}</th><th>${t("grades.table.due")}</th><th>${t("grades.table.graded")}</th><th></th></tr></thead>
+        <tbody>
+          ${
+            groupAssignments
+              .map((a) => {
+                const gradedCount = grades.filter((g) => g.assignmentId === a.id).length;
+                return `<tr><td><strong>${escapeHtml(a.title)}</strong></td><td>${a.due || "—"}</td><td>${gradedCount}/${roster.length}</td><td>${a.id ? `<button onclick="openModal('gradeStudent', { assignmentId: '${escapeJs(a.id)}' })">${t("grades.grade")}</button>` : ""}</td></tr>`;
+              })
+              .join("") || `<tr><td colspan="4" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`
           }
         </tbody>
       </table>
@@ -1303,7 +1358,10 @@ function searchResults() {
     ...people.students.map((s) => ({ type: t("search.type.student"), title: fullName(s), detail: `${s.email} · ${groupName(s.groupId)}`, student: s, moduleId: "students" })),
     ...people.instructors.map((i) => ({ type: t("search.type.instructor"), title: i.name, detail: `${i.email} · ${(i.classes || []).join(", ")}`, staffOnly: true })),
     ...groups.map((g) => ({ type: t("search.type.group"), title: g.name, detail: `${g.course} · ${g.instructor || ""}`, moduleId: "groups" })),
-    ...assignments.map((a) => ({ type: t("search.type.assignment"), title: a.title, detail: `${a.course} · ${a.due || ""}`, moduleId: "assignments" })),
+    // moduleId "groups", not "assignments" — an assignment now lives on
+    // its group's own page (see groupDetailView()), there's no standalone
+    // Assignments tab to gate this against anymore.
+    ...assignments.map((a) => ({ type: t("search.type.assignment"), title: a.title, detail: `${a.course} · ${a.due || ""}`, moduleId: "groups" })),
   ]).filter((row) => `${row.type} ${row.title} ${row.detail}`.toLowerCase().includes(term));
 
   return `
@@ -1359,6 +1417,37 @@ async function supabaseInsert(table, rows) {
       throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
     }
     throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
+  }
+  return body;
+}
+
+// PATCHes an existing row, filtered by one column/value pair (almost
+// always the row's own id/ref column). Used by every "Edit ..." form
+// below — RLS (and, for groups/students, the column-restricting triggers
+// in supabase/migrations/0012_...sql) is what actually decides whether a
+// given viewer's edit is allowed; this is just the HTTP call.
+async function supabaseUpdate(table, filterColumn, filterValue, patch) {
+  if (!state.session) throw new Error("Sign in and try again.");
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/rest/v1/${table}?${encodeURIComponent(filterColumn)}=eq.${encodeURIComponent(filterValue)}`, {
+    method: "PATCH",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+      "Content-Type": "application/json",
+      Prefer: "return=representation",
+    },
+    body: JSON.stringify(patch),
+  });
+  const body = await response.json().catch(() => []);
+  if (!response.ok) {
+    if (response.status === 409) {
+      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+    }
+    throw new Error(body?.message || body?.hint || `Could not save changes to ${table}.`);
+  }
+  if (Array.isArray(body) && body.length === 0) {
+    throw new Error(`No matching ${table} row was updated — you may not have permission to change it.`);
   }
   return body;
 }
@@ -1428,6 +1517,24 @@ async function supabaseUploadFile(path, file) {
     const detail = await response.text().catch(() => "");
     throw new Error(detail || "Could not upload the file.");
   }
+}
+
+// Best-effort: used when deleting a group, to clean up that group's
+// uploaded material files from storage before the DB row cascade-deletes
+// the `materials` table rows themselves (deleting the `groups` row alone
+// doesn't touch Storage — see handleRemoveGroup()). A failed delete here
+// is swallowed by the caller rather than blocking the group deletion; an
+// orphaned file is a much smaller problem than a group that won't delete.
+async function supabaseDeleteFile(path) {
+  if (!state.session) return;
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  await fetch(`${base}/storage/v1/object/materials/${path}`, {
+    method: "DELETE",
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+  });
 }
 
 async function supabaseDownloadFile(path, fileName) {
@@ -1676,7 +1783,19 @@ function openModal(type, extra = {}) {
   state.modalBusy = false;
   state.modalError = "";
   state.modalNotice = "";
+  if (type === "addExistingStudent") state.addStudentSearchQuery = "";
   render();
+}
+
+// Updates just the results list inside the open modal, the same way
+// renderAttendanceRoster() does for the attendance modal — the modal
+// itself lives outside #content (see modalHost() in shell()), so
+// renderContentOnly() would never reach it, and a full render() on every
+// keystroke would drop focus from the search input.
+function setAddStudentSearchQuery(value) {
+  state.addStudentSearchQuery = value;
+  const container = document.getElementById("existing-student-results");
+  if (container) container.innerHTML = existingStudentResultsRows(state.modal?.groupId);
 }
 
 function closeModal() {
@@ -1716,16 +1835,24 @@ function modalBody(modal) {
   switch (modal.type) {
     case "addGroup":
       return addGroupModal();
+    case "editGroup":
+      return editGroupModal(modal);
     case "addInstructor":
       return addInstructorModal();
+    case "editInstructor":
+      return editInstructorModal(modal);
     case "addStudent":
       return addStudentModal(modal);
+    case "editStudent":
+      return editStudentModal(modal);
+    case "addExistingStudent":
+      return addExistingStudentModal(modal);
     case "addManager":
       return addManagerModal();
     case "addMaterial":
       return addMaterialModal(modal);
     case "addAssignment":
-      return addAssignmentModal();
+      return addAssignmentModal(modal);
     case "takeAttendance":
       return addAttendanceModal(modal);
     case "gradeStudent":
@@ -1769,6 +1896,42 @@ function addGroupModal() {
   `;
 }
 
+// Manager sees every field, including course/instructor. That group's own
+// Instructor (canManageGroup() is what gates the "Edit" button that opens
+// this) only sees name/schedule/room/status — course and instructor are
+// left out of the form entirely for them rather than shown disabled, so
+// there's nothing to be surprised the server rejected: the column-
+// restricting trigger in supabase/migrations/0012_...sql would reject
+// those two fields from a non-Manager anyway.
+function editGroupModal(modal) {
+  const group = groups.find((g) => g.id === modal.groupId);
+  if (!group) {
+    return `<h2>${t("groups.edit")}</h2><p class="hint">${t("groups.notFound")}</p><div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>`;
+  }
+  const isManager = ["Super Admin", "School Admin"].includes(state.role);
+  const instructorOptions = people.instructors
+    .map((instructor) => `<option value="${escapeHtml(instructor.name)}" ${instructor.name === group.instructor ? "selected" : ""}>${escapeHtml(instructor.name)}</option>`)
+    .join("");
+  const statusOptions = ["Active", "Paused", "Completed", "Archived"]
+    .map((s) => `<option value="${s}" ${s === group.status ? "selected" : ""}>${s}</option>`)
+    .join("");
+  return `
+    <h2>${t("groups.edit")}</h2>
+    ${modalMessages()}
+    <form onsubmit="handleEditGroup(event, '${escapeJs(group.id)}')">
+      <label>${t("groups.form.name")}<input type="text" name="name" value="${escapeHtml(group.name)}" required /></label>
+      ${isManager ? `<label>${t("groups.form.course")}<input type="text" name="course" value="${escapeHtml(group.course)}" required /></label>` : ""}
+      ${isManager ? `<label>${t("groups.form.instructor")}<select name="instructor" required>${instructorOptions}</select></label>` : ""}
+      <label>${t("groups.form.schedule")}<input type="text" name="schedule" value="${escapeHtml(group.schedule || "")}" placeholder="${t("groups.form.schedule.placeholder")}" /></label>
+      <label>${t("groups.form.room")}<input type="text" name="room" value="${escapeHtml(group.room || "")}" placeholder="${t("groups.form.room.placeholder")}" /></label>
+      <label>${t("common.status")}<select name="status">${statusOptions}</select></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("common.saveChanges")}</button>
+      </div>
+    </form>
+  `;
+}
+
 function addInstructorModal() {
   return `
     <h2>${t("instructors.form.submit")}</h2>
@@ -1785,10 +1948,38 @@ function addInstructorModal() {
   `;
 }
 
-function addStudentModal() {
+// Manager-only (see security.js's canEditInstructorProfiles) — an
+// Instructor's own info (name/email/bio) is never self-editable from
+// here; only the group info they're assigned to (see editGroupModal).
+function editInstructorModal(modal) {
+  const instructor = people.instructors.find((i) => i.name === modal.instructorName);
+  if (!instructor) {
+    return `<h2>${t("instructors.edit")}</h2><p class="hint">${t("instructors.notFound")}</p><div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>`;
+  }
+  return `
+    <h2>${t("instructors.edit")}</h2>
+    ${modalMessages()}
+    <form onsubmit="handleEditInstructor(event, '${escapeJs(instructor.name)}')">
+      <label>${t("instructors.form.name")}<input type="text" name="name" value="${escapeHtml(instructor.name)}" required /></label>
+      <label>${t("instructors.form.email")}<input type="email" name="email" value="${escapeHtml(instructor.email)}" required /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("common.saveChanges")}</button>
+      </div>
+    </form>
+  `;
+}
+
+// `modal.groupId` is set when this is opened from a group's own page (see
+// groupDetailView()'s "Add student" button) — the group picker collapses
+// to a fixed, non-editable field so the new student always lands in that
+// exact group, matching addMaterialModal/addAssignmentModal's pattern.
+// Opened from the school-wide Students tab instead, the picker is back
+// (any group the viewer can put a student into).
+function addStudentModal(modal = {}) {
   const isInstructor = state.role === "Instructor";
   const availableGroups = groupsForViewer();
-  if (availableGroups.length === 0) {
+  const lockedGroup = modal.groupId ? groups.find((g) => g.id === modal.groupId) : null;
+  if (!lockedGroup && availableGroups.length === 0) {
     return emptyDependencyNotice(
       t("students.new"),
       t("groups.needInstructorBody"),
@@ -1801,16 +1992,113 @@ function addStudentModal() {
     .join("");
   return `
     <h2>${t("students.new")}</h2>
-    ${isInstructor ? `<p class="hint">${t("students.instructorHint")}</p>` : ""}
+    ${lockedGroup ? `<p class="hint">${escapeHtml(lockedGroup.name)}</p>` : isInstructor ? `<p class="hint">${t("students.instructorHint")}</p>` : ""}
     ${modalMessages()}
     <form onsubmit="handleAddStudent(event)">
       <label>${t("students.csv.header.first")}<input type="text" name="firstName" required /></label>
       <label>${t("students.csv.header.last")}<input type="text" name="lastName" required /></label>
       <label>${t("common.email")}<input type="email" name="email" required /></label>
-      <label>${t("groups.title")}<select name="groupId" required><option value="">${t("groups.form.instructor.choose")}</option>${groupOptions}</select></label>
+      ${
+        lockedGroup
+          ? `<input type="hidden" name="groupId" value="${escapeHtml(lockedGroup.id)}" />`
+          : `<label>${t("groups.title")}<select name="groupId" required><option value="">${t("groups.form.instructor.choose")}</option>${groupOptions}</select></label>`
+      }
       <label class="checkline"><input type="checkbox" name="issueLogin" checked /> ${t("instructors.form.issueLogin")}</label>
       <div class="modal-actions">
         <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("students.new")}</button>
+      </div>
+    </form>
+  `;
+}
+
+// Manager-only (see security.js's canAddExistingStudentToGroup) — finds a
+// student already enrolled elsewhere (or with no group at all) and moves
+// them into this group, as an alternative to creating a brand-new student
+// profile. Opened from a group's own page (see groupDetailView()).
+function addExistingStudentModal(modal) {
+  const group = groups.find((g) => g.id === modal.groupId);
+  if (!group) {
+    return `<h2>${t("groups.addExisting.title")}</h2><p class="hint">${t("groups.notFound")}</p><div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>`;
+  }
+  return `
+    <h2>${t("groups.addExisting.title")}</h2>
+    <p class="hint">${escapeHtml(group.name)}</p>
+    ${modalMessages()}
+    <label>${t("common.search")}
+      <input type="search" value="${escapeHtml(state.addStudentSearchQuery || "")}" oninput="setAddStudentSearchQuery(this.value)" placeholder="${t("groups.addExisting.searchPlaceholder")}" autofocus />
+    </label>
+    <div class="modal-existing-list" id="existing-student-results">${existingStudentResultsRows(modal.groupId)}</div>
+  `;
+}
+
+function existingStudentResultsRows(groupId) {
+  const query = (state.addStudentSearchQuery || "").trim().toLowerCase();
+  if (!query) return `<p class="hint">${t("groups.addExisting.typeToSearch")}</p>`;
+  const matches = people.students
+    .filter((s) => s.groupId !== groupId)
+    .filter((s) => `${fullName(s)} ${s.email}`.toLowerCase().includes(query))
+    .slice(0, 20);
+  if (!matches.length) return `<p class="empty">${t("groups.addExisting.noMatches")}</p>`;
+  return matches
+    .map(
+      (s) => `
+        <div class="modal-existing-row">
+          <div>
+            <strong>${escapeHtml(fullName(s))}</strong>
+            <span>${escapeHtml(s.email)} · ${escapeHtml(groupName(s.groupId))}</span>
+          </div>
+          <button type="button" onclick="handleAddExistingStudentToGroup('${escapeJs(s.id)}', '${escapeJs(groupId)}')" ${state.modalBusy ? "disabled" : ""}>${t("groups.addExisting.add")}</button>
+        </div>
+      `,
+    )
+    .join("");
+}
+
+async function handleAddExistingStudentToGroup(studentId, groupId) {
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseUpdate("students", "student_id", studentId, { group_id: groupId });
+    await refreshAfterWrite();
+    closeModal();
+    openGroupDetail(groupId);
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || t("groups.addExisting.saveError");
+    render();
+  }
+}
+
+// A Manager (see security.js's canEditStudent) edits from the school-wide
+// Students tab; that student's own Instructor edits the same fields from
+// the group's roster (see groupDetailView()). Email/group are never in
+// this form — moving a student to a different group is
+// addExistingStudentModal()'s job, and changing their login email stays
+// Manager-only at the server (see supabase/migrations/0012_...sql), so
+// there's no point offering either field here to someone it would just
+// get rejected for.
+function editStudentModal(modal) {
+  const student = people.students.find((s) => s.id === modal.studentId);
+  if (!student) {
+    return `<h2>${t("students.edit")}</h2><p class="hint">${t("students.notFound")}</p><div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>`;
+  }
+  const isManager = ["Super Admin", "School Admin"].includes(state.role);
+  const statusOptions = ["Active", "Paused", "Graduated", "Withdrawn"]
+    .map((s) => `<option value="${s}" ${s === student.status ? "selected" : ""}>${s}</option>`)
+    .join("");
+  return `
+    <h2>${t("students.edit")}</h2>
+    ${modalMessages()}
+    <form onsubmit="handleEditStudent(event, '${escapeJs(student.id)}')">
+      <label>${t("students.csv.header.first")}<input type="text" name="firstName" value="${escapeHtml(student.first)}" required /></label>
+      <label>${t("students.csv.header.last")}<input type="text" name="lastName" value="${escapeHtml(student.last)}" required /></label>
+      <label>${t("students.profile.phone")}<input type="text" name="phone" value="${escapeHtml(student.phone || "")}" /></label>
+      <label>${t("students.profile.level")}<input type="text" name="level" value="${escapeHtml(student.level || "")}" /></label>
+      ${isManager ? `<label>${t("common.status")}<select name="status">${statusOptions}</select></label>` : ""}
+      <label>${t("students.profile.notes")}<textarea name="notes" rows="3">${escapeHtml(student.notes || "")}</textarea></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("common.saveChanges")}</button>
       </div>
     </form>
   `;
@@ -1850,26 +2138,18 @@ function addMaterialModal(modal) {
   `;
 }
 
-function addAssignmentModal() {
-  const availableGroups = groupsForViewer();
-  if (availableGroups.length === 0) {
-    return emptyDependencyNotice(
-      t("assignments.needGroupTitle"),
-      t("assignments.needGroupBody"),
-      t("assignments.addGroupCta"),
-      "addGroup",
-    );
-  }
-  const groupOptions = availableGroups
-    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
-    .join("");
+// Opened from a group's own page (groupDetailView) — same shape as
+// addMaterialModal(): the group is already known, so there's no group
+// picker here anymore.
+function addAssignmentModal(modal) {
+  const group = groups.find((g) => g.id === modal.groupId);
   return `
     <h2>${t("assignments.new")}</h2>
+    <p class="hint">${escapeHtml(group?.name || "")}</p>
     ${modalMessages()}
-    <form onsubmit="handleAddAssignment(event)">
+    <form onsubmit="handleAddAssignment(event, '${escapeJs(modal.groupId)}')">
       <label>${t("assignments.form.title")}<input type="text" name="title" required /></label>
-      <label>${t("assignments.form.course")}<input type="text" name="course" required /></label>
-      <label>${t("assignments.form.group")}<select name="groupId" required><option value="">${t("assignments.form.group.choose")}</option>${groupOptions}</select></label>
+      <label>${t("assignments.form.course")}<input type="text" name="course" required value="${escapeHtml(group?.course || "")}" /></label>
       <label>${t("assignments.form.due")}<input type="date" name="dueDate" /></label>
       <label>${t("assignments.form.maxGrade")}<input type="number" name="maxGrade" value="100" min="1" /></label>
       <label>${t("assignments.form.difficulty")}
@@ -2275,6 +2555,76 @@ async function handleAddGroup(event) {
   }
 }
 
+async function handleEditGroup(event, groupId) {
+  event.preventDefault();
+  const form = event.target;
+  const name = form.name.value.trim();
+  const schedule = form.schedule.value.trim();
+  const room = form.room.value.trim();
+  const status = form.status.value;
+  if (!name) {
+    state.modalError = t("groups.form.missingFields");
+    render();
+    return;
+  }
+  const patch = { name, schedule: schedule || null, room: room || null, status };
+  // Only present in the form at all for a Manager (see editGroupModal) —
+  // an Instructor editing their own group never sends these two fields,
+  // so there's nothing here for the server-side trigger to even need to
+  // reject.
+  if (form.course) patch.course = form.course.value.trim();
+  if (form.instructor) patch.instructor = form.instructor.value.trim();
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseUpdate("groups", "group_id", groupId, patch);
+    await refreshAfterWrite();
+    closeModal();
+    openGroupDetail(groupId);
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || t("groups.form.saveError");
+    render();
+  }
+}
+
+// Manager-only (see security.js's canRemoveGroups) and irreversible: the
+// group row cascade-deletes its attendance records, materials, chat
+// messages, and assignments (see the FK constraints in
+// supabase/migrations/0011_...sql); students in the group are kept, just
+// unassigned (group_id set to null). Storage files for this group's
+// materials are cleaned up best-effort first, since deleting the DB row
+// doesn't touch actual files sitting in the storage bucket.
+async function handleRemoveGroup(groupId, name) {
+  if (!state.session) return;
+  if (!window.confirm(t("groups.confirmRemove", { name }))) return;
+  state.groupActionBusy = groupId;
+  state.groupActionError = "";
+  renderContentOnly();
+  try {
+    const groupMaterials = materials.filter((m) => m.groupId === groupId);
+    await Promise.all(groupMaterials.map((m) => supabaseDeleteFile(m.filePath).catch(() => {})));
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(`${base}/rest/v1/groups?group_id=eq.${encodeURIComponent(groupId)}`, {
+      method: "DELETE",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        Prefer: "return=minimal",
+      },
+    });
+    if (!response.ok) throw new Error(t("groups.form.removeError"));
+    await refreshAfterWrite();
+    state.groupActionBusy = null;
+    backToGroups();
+  } catch (error) {
+    state.groupActionBusy = null;
+    state.groupActionError = error.message || t("groups.form.removeError");
+    renderContentOnly();
+  }
+}
+
 async function handleAddInstructor(event) {
   event.preventDefault();
   const form = event.target;
@@ -2300,6 +2650,39 @@ async function handleAddInstructor(event) {
     state.modalBusy = false;
     state.modalError = "";
     state.modalNotice = notice;
+    render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || t("instructors.form.saveError");
+    render();
+  }
+}
+
+// Renaming an instructor cascades server-side (see
+// supabase/migrations/0012_...sql's instructors_cascade_rename trigger) to
+// every group they're assigned to and their own account's RLS matching —
+// nothing extra to do here beyond the one PATCH and a refetch. Editing
+// their login email only updates this profile record, not the Supabase
+// Auth email itself — a known gap, same as everywhere else in this app
+// that doesn't yet offer changing a login's email after it's issued.
+async function handleEditInstructor(event, name) {
+  event.preventDefault();
+  const form = event.target;
+  const newName = form.name.value.trim();
+  const email = form.email.value.trim().toLowerCase();
+  if (!newName || !email) {
+    state.modalError = t("instructors.form.missingFields");
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseUpdate("instructors", "name", name, { name: newName, email });
+    await refreshAfterWrite();
+    state.modalBusy = false;
+    state.modalNotice = t("instructors.savedNotice", { name: newName });
     render();
   } catch (error) {
     state.modalBusy = false;
@@ -2351,6 +2734,47 @@ async function handleAddStudent(event) {
     state.modalError = "";
     state.modalNotice = notice;
     render();
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || t("students.form.saveError");
+    render();
+  }
+}
+
+// Manager can edit any student; that student's own Instructor can edit
+// one in their own group (see security.js's canEditStudent, which gates
+// the "Edit" button — the server re-checks the same boundary via RLS, and
+// further narrows an Instructor's edit to these exact fields via the
+// column-restricting trigger in supabase/migrations/0012_...sql, so
+// there's nothing here the server wouldn't also allow).
+async function handleEditStudent(event, studentId) {
+  event.preventDefault();
+  const form = event.target;
+  const firstName = form.firstName.value.trim();
+  const lastName = form.lastName.value.trim();
+  const phone = form.phone.value.trim();
+  const level = form.level.value.trim();
+  const notes = form.notes.value.trim();
+  if (!firstName || !lastName) {
+    state.modalError = t("students.form.missingFields");
+    render();
+    return;
+  }
+  const patch = {
+    first_name: firstName,
+    last_name: lastName,
+    phone: phone || null,
+    level: level || null,
+    notes: notes || null,
+  };
+  if (form.status) patch.status = form.status.value;
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    await supabaseUpdate("students", "student_id", studentId, patch);
+    await refreshAfterWrite();
+    closeModal();
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("students.form.saveError");
@@ -2487,12 +2911,11 @@ async function handleAddMaterial(event, groupId) {
   }
 }
 
-async function handleAddAssignment(event) {
+async function handleAddAssignment(event, groupId) {
   event.preventDefault();
   const form = event.target;
   const title = form.title.value.trim();
   const course = form.course.value.trim();
-  const groupId = form.groupId.value;
   const dueDate = form.dueDate.value || null;
   const maxGrade = Number(form.maxGrade.value) || 100;
   const difficulty = form.difficulty.value;
@@ -2522,7 +2945,7 @@ async function handleAddAssignment(event) {
     ]);
     await refreshAfterWrite();
     closeModal();
-    navigate("assignments");
+    openGroupDetail(groupId);
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("assignments.form.saveError");
@@ -2862,7 +3285,7 @@ function marketingScreen() {
         <h1>${t("marketing.hero.title")}</h1>
         <p class="m-sub">${t("marketing.hero.sub")}</p>
         <div class="m-hero-actions">
-          <a class="m-cta-primary" href="#contact">${t("marketing.hero.cta.primary")}</a>
+          <button type="button" class="m-cta-primary" onclick="openPromoModal()">${t("marketing.hero.cta.primary")}</button>
           <a class="m-cta-secondary" href="#features">${t("marketing.hero.cta.secondary")}</a>
         </div>
         <div class="m-stats">
@@ -3024,14 +3447,28 @@ function dismissPromoModal() {
   render();
 }
 
+// Re-opens the offer popup — used by the hero's "Book a free trial class"
+// button (see marketingScreen()) so a visitor who already dismissed it (or
+// is on a fresh reload where it hasn't shown yet) still sees the group
+// offer first, same popup either way.
+function openPromoModal() {
+  state.promoModalDismissed = false;
+  render();
+}
+
 // Closes the popup and takes the visitor straight to the real Contact
-// form — submissions there already land in the Contact Requests panel
-// every Manager can see, so there's no separate inbox to check.
+// form, pre-set to "request a call back" (checks that box and focuses the
+// phone field) rather than the default write-a-message mode — submissions
+// there already land in the Contact Requests panel every Manager can see,
+// so there's no separate inbox to check.
 function openPromoForm() {
   dismissPromoModal();
   requestAnimationFrame(() => {
     document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    document.querySelector(".m-contact-form textarea[name='message']")?.focus();
+    const form = document.querySelector(".m-contact-form");
+    const wantsCall = form?.querySelector("input[name='wantsCall']");
+    if (wantsCall) wantsCall.checked = true;
+    (form?.querySelector("input[name='phone']") || form?.querySelector("input[name='name']"))?.focus();
   });
 }
 
@@ -3255,6 +3692,7 @@ function instructorRow(instructor) {
   const handlerName = account ? "resetCredentials" : "generateCredentials";
   const handler = `${handlerName}('${key}', 'Instructor', '${escapeJs(instructor.email)}', '${escapeJs(instructor.name)}', '${escapeJs(instructor.name)}')`;
   const canRemove = canRemoveAccounts(state.role);
+  const canEdit = canEditInstructorProfiles(state.role);
   const removeKey = `remove-instructor-${instructor.name}`;
   const removeBusy = state.accountsBusy === removeKey;
 
@@ -3266,6 +3704,7 @@ function instructorRow(instructor) {
       <td>${status}</td>
       <td>
         <button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? t("common.working") : actionLabel}</button>
+        ${canEdit ? `<button onclick="openModal('editInstructor', { instructorName: '${escapeJs(instructor.name)}' })">${t("common.edit")}</button>` : ""}
         ${canRemove ? `<button onclick="handleRemoveInstructor('${escapeJs(instructor.name)}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("common.remove")}</button>` : ""}
       </td>
     </tr>
@@ -4060,6 +4499,7 @@ window.generateCredentials = generateCredentials;
 window.resetCredentials = resetCredentials;
 window.dismissAccountsNotice = dismissAccountsNotice;
 window.dismissPromoModal = dismissPromoModal;
+window.openPromoModal = openPromoModal;
 window.openPromoForm = openPromoForm;
 window.openModal = openModal;
 window.closeModal = closeModal;
@@ -4067,6 +4507,12 @@ window.handleAddInstructor = handleAddInstructor;
 window.handleAddStudent = handleAddStudent;
 window.handleAddManager = handleAddManager;
 window.handleAddGroup = handleAddGroup;
+window.handleEditGroup = handleEditGroup;
+window.handleRemoveGroup = handleRemoveGroup;
+window.handleEditInstructor = handleEditInstructor;
+window.handleEditStudent = handleEditStudent;
+window.setAddStudentSearchQuery = setAddStudentSearchQuery;
+window.handleAddExistingStudentToGroup = handleAddExistingStudentToGroup;
 window.handleAddMaterial = handleAddMaterial;
 window.handleAddAssignment = handleAddAssignment;
 window.supabaseDownloadFile = supabaseDownloadFile;

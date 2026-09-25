@@ -1,4 +1,4 @@
--- Drops everything created by migrations 0001-0011, so you can re-run
+-- Drops everything created by migrations 0001-0012, so you can re-run
 -- them from a clean slate. Safe to run even if some objects don't exist
 -- yet (everything uses IF EXISTS) — this covers both a database that
 -- already had 0011 applied (groups/grades/messages/etc.) and one that
@@ -33,6 +33,9 @@ drop table if exists public.parents cascade;
 drop table if exists public.classes cascade;
 
 drop function if exists public.mark_password_changed() cascade;
+drop function if exists public.enforce_group_edit_columns() cascade;
+drop function if exists public.enforce_student_edit_columns() cascade;
+drop function if exists public.cascade_instructor_rename() cascade;
 drop function if exists public.can_view_student(text, text) cascade;
 drop function if exists public.can_view_group(text) cascade;
 drop function if exists public.can_access_group_chat(text) cascade;

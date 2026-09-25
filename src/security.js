@@ -16,12 +16,14 @@ export function roleLabel(role) {
 // materials are uploaded from a "Upload materials" button on a group's
 // own page, and attendance is taken from that same group page by its own
 // Instructor — there is no school-wide Attendance or Materials tab
-// anymore.
+// anymore. "assignments" joined that list too: a group's own page now has
+// its own Assignments section (see groupDetailView()'s assignments block
+// in app.js), so there's no more school-wide Assignments tab either.
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "groups", "assignments", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "profile"],
-  "School Admin": ["dashboard", "instructors", "students", "groups", "assignments", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "profile"],
-  Instructor: ["dashboard", "students", "groups", "assignments", "grades", "chat", "staffRequests", "accounts", "profile"],
-  Student: ["dashboard", "groups", "assignments", "grades", "chat", "profile"],
+  "Super Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "profile"],
+  "School Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "profile"],
+  Instructor: ["dashboard", "students", "groups", "grades", "chat", "staffRequests", "accounts", "profile"],
+  Student: ["dashboard", "groups", "grades", "chat", "profile"],
 };
 
 // Manager (Super Admin or School Admin) can issue Manager, Instructor, and
@@ -134,4 +136,42 @@ export function canManageGroup(viewer, group) {
 
 export function canTakeAttendanceForGroup(viewer, group) {
   return canManageGroup(viewer, group);
+}
+
+// Deleting a group is Manager-only and irreversible (it cascades to that
+// group's attendance/materials/assignments/chat history — see
+// supabase/migrations/0012_...sql) — unlike editing a group's own info,
+// which canManageGroup() above already lets that group's own Instructor
+// do too.
+export function canRemoveGroups(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+// Adding an EXISTING student to a group by searching across the whole
+// school only makes sense for a Manager — an Instructor's own view of
+// `students` is already scoped by RLS to students already in one of their
+// own groups (see can_view_student() in the same migration), so there's
+// nothing wider for them to search. An Instructor still adds a brand-new
+// student straight into their own group via canCreateStudentProfiles.
+export function canAddExistingStudentToGroup(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+// Editing an instructor's own profile fields (name/email/bio) stays
+// Manager-only — separate from canManageGroup(), which only covers a
+// group's own info, not the instructor record itself.
+export function canEditInstructorProfiles(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+// A Manager can edit any student's info. An Instructor can edit a
+// student's info only for a student already in one of their own groups —
+// same boundary as canViewStudent(), reused here rather than duplicated.
+// The server re-checks this again at the row level (see
+// supabase/migrations/0012_...sql's "students update own instructor"
+// policy and its column-restricting trigger — an Instructor's edit is
+// further limited there to non-identity fields), this is just what keeps
+// the "Edit" button from ever appearing somewhere it would just fail.
+export function canEditStudent(viewer, student) {
+  return canViewStudent(viewer, student);
 }

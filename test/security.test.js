@@ -18,7 +18,6 @@ const navItems = [
   ["dashboard", "Dashboard"],
   ["students", "Students"],
   ["groups", "Groups"],
-  ["assignments", "Assignments"],
   ["reports", "Reports"],
   ["opportunities", "Work With Us"],
   ["settings", "Settings"],
@@ -51,7 +50,7 @@ test("admin roles can access reporting while only super admin can access platfor
 test("visible navigation is derived from role permissions", () => {
   assert.deepEqual(
     visibleModulesForRole("Student", navItems).map(([id]) => id),
-    ["dashboard", "groups", "assignments"],
+    ["dashboard", "groups"],
   );
 });
 
@@ -132,7 +131,7 @@ test("global search removes rows outside viewer scope", () => {
     { type: "Student", student: students[0], title: "Maya" },
     { type: "Student", student: students[1], title: "Omar" },
     { type: "Instructor", title: "Amina", staffOnly: true },
-    { type: "Assignment", title: "Number Game", moduleId: "assignments" },
+    { type: "Assignment", title: "Number Game", moduleId: "groups" },
   ]);
 
   assert.deepEqual(rows.map((row) => row.title), ["Maya", "Number Game"]);
