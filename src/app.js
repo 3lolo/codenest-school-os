@@ -362,12 +362,12 @@ function adminDashboard() {
 
   return `
     <div class="metric-grid">
-      ${metric(t("dashboard.metric.totalStudents"), people.students.length, people.students.length ? t("dashboard.metric.acrossGroups") : t("dashboard.metric.noStudentsYet"))}
-      ${metric(t("dashboard.metric.activeStudents"), activeStudents, people.students.length ? t("dashboard.metric.percentOfTotal", { pct: retention }) : "—")}
-      ${metric(t("dashboard.metric.activeGroups"), groups.filter((g) => g.status === "Active").length, t("dashboard.metric.pausedCount", { count: groups.filter((g) => g.status === "Paused").length }))}
-      ${metric(t("dashboard.metric.pendingSubmissions"), pending, t("dashboard.metric.needsGrading"))}
-      ${metric(t("dashboard.metric.avgAttendance"), people.students.length ? `${avgAttendance}%` : "—", t("dashboard.metric.absenceAlerts", { count: attendanceAlerts }))}
-      ${metric(t("dashboard.metric.instructors"), people.instructors.length, t("dashboard.metric.onStaff"))}
+      ${metric(t("dashboard.metric.totalStudents"), people.students.length, people.students.length ? t("dashboard.metric.acrossGroups") : t("dashboard.metric.noStudentsYet"), "users")}
+      ${metric(t("dashboard.metric.activeStudents"), activeStudents, people.students.length ? t("dashboard.metric.percentOfTotal", { pct: retention }) : "—", "check")}
+      ${metric(t("dashboard.metric.activeGroups"), groups.filter((g) => g.status === "Active").length, t("dashboard.metric.pausedCount", { count: groups.filter((g) => g.status === "Paused").length }), "layers")}
+      ${metric(t("dashboard.metric.pendingSubmissions"), pending, t("dashboard.metric.needsGrading"), "clipboard")}
+      ${metric(t("dashboard.metric.avgAttendance"), people.students.length ? `${avgAttendance}%` : "—", t("dashboard.metric.absenceAlerts", { count: attendanceAlerts }), "chart")}
+      ${metric(t("dashboard.metric.instructors"), people.instructors.length, t("dashboard.metric.onStaff"), "shield")}
     </div>
     <div class="two-col">
       <section class="panel">
@@ -376,8 +376,15 @@ function adminDashboard() {
       </section>
       <section class="panel">
         <div class="panel-head"><h2>${t("dashboard.performance")}</h2><button onclick="navigate('reports')">${t("common.export")}</button></div>
+        <div class="donut-row">
+          <div class="donut" style="--donut-value:${avgCompletion};--donut-color:var(--brand)" data-label="${avgCompletion}%" role="img" aria-label="${t("chart.completion")}: ${avgCompletion}%"></div>
+          <div class="donut-legend">
+            <span style="--dot-color:var(--brand)">${t("chart.completion")} · ${avgCompletion}%</span>
+            <span style="--dot-color:var(--gold)">${t("chart.attendance")} · ${avgAttendance}%</span>
+            <span style="--dot-color:var(--blue)">${t("chart.avgGrade")} · ${avgGrade}%</span>
+          </div>
+        </div>
         ${chartRow(t("chart.attendance"), avgAttendance)}
-        ${chartRow(t("chart.completion"), avgCompletion)}
         ${chartRow(t("chart.avgGrade"), avgGrade)}
       </section>
     </div>
@@ -415,10 +422,10 @@ function instructorDashboard() {
   const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
   return `
     <div class="metric-grid">
-      ${metric(t("dashboard.metric.assignedGroups"), groups.length, groups.map((g) => g.course).join(", ") || t("dashboard.metric.noneAssignedYet"))}
-      ${metric(t("dashboard.metric.students"), people.students.length, t("dashboard.metric.activeCount", { count: activeStudents }))}
-      ${metric(t("dashboard.metric.toGrade"), toGrade, t("dashboard.metric.ungradedSubmissions"))}
-      ${metric(t("dashboard.metric.attendanceAlerts"), attendanceAlerts, t("dashboard.metric.followUpNeeded"))}
+      ${metric(t("dashboard.metric.assignedGroups"), groups.length, groups.map((g) => g.course).join(", ") || t("dashboard.metric.noneAssignedYet"), "layers")}
+      ${metric(t("dashboard.metric.students"), people.students.length, t("dashboard.metric.activeCount", { count: activeStudents }), "users")}
+      ${metric(t("dashboard.metric.toGrade"), toGrade, t("dashboard.metric.ungradedSubmissions"), "clipboard")}
+      ${metric(t("dashboard.metric.attendanceAlerts"), attendanceAlerts, t("dashboard.metric.followUpNeeded"), "chart")}
     </div>
     <div class="two-col">
       ${assignmentPanel()}
@@ -446,17 +453,17 @@ function studentDashboard() {
       <div><p class="eyebrow">${t("dashboard.studentPortal")}</p><h2>${escapeHtml(fullName(student))}</h2><span>${escapeHtml(student.level || "")} · ${escapeHtml(student.email)}</span></div>
     </div>
     <div class="metric-grid">
-      ${metric(t("dashboard.metric.progress"), `${student.progress}%`, t("dashboard.metric.keepItUp"))}
-      ${metric(t("dashboard.metric.attendance"), `${student.attendance}%`, t("dashboard.metric.absenceCount", { count: student.absences }))}
-      ${metric(t("dashboard.metric.avgGrade"), `${student.avgGrade}%`, t("dashboard.metric.latestGrade"))}
-      ${metric(t("dashboard.metric.openAssignments"), openAssignments, t("dashboard.metric.published"))}
+      ${metric(t("dashboard.metric.progress"), `${student.progress}%`, t("dashboard.metric.keepItUp"), "chart")}
+      ${metric(t("dashboard.metric.attendance"), `${student.attendance}%`, t("dashboard.metric.absenceCount", { count: student.absences }), "check")}
+      ${metric(t("dashboard.metric.avgGrade"), `${student.avgGrade}%`, t("dashboard.metric.latestGrade"), "clipboard")}
+      ${metric(t("dashboard.metric.openAssignments"), openAssignments, t("dashboard.metric.published"), "folder")}
     </div>
     ${assignmentPanel()}
   `;
 }
 
-function metric(label, value, note) {
-  return `<article class="metric"><span>${label}</span><strong>${value}</strong><small>${note}</small></article>`;
+function metric(label, value, note, icon) {
+  return `<article class="metric">${icon ? `<span class="metric-icon" aria-hidden="true">${icons[icon]}</span>` : ""}<span>${label}</span><strong>${value}</strong><small>${note}</small></article>`;
 }
 
 function action(level, title, body) {
@@ -973,17 +980,10 @@ function chatView() {
   const canModerate = ["Super Admin", "School Admin"].includes(state.role);
   const viewerName = state.profile?.full_name || "";
 
-  return `
+  const messagesPanel = `
     <section class="panel chat-panel">
       <div class="panel-head">
         <h2>${escapeHtml(activeGroup?.name || t("chat.title"))}</h2>
-        ${
-          availableGroups.length > 1
-            ? `<select onchange="setChatGroup(this.value)">
-                ${availableGroups.map((g) => `<option value="${escapeHtml(g.id)}" ${g.id === state.chatGroupId ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}
-              </select>`
-            : ""
-        }
       </div>
       ${state.chatError ? `<p class="notice-row auth-error">${escapeHtml(state.chatError)}</p>` : ""}
       <div class="chat-thread" id="chat-thread">
@@ -1008,6 +1008,34 @@ function chatView() {
         <button type="submit" ${state.chatSendBusy ? "disabled" : ""}>${state.chatSendBusy ? t("common.sending") : t("chat.send")}</button>
       </form>
     </section>
+  `;
+
+  // Multiple groups (a Manager sees every group, an Instructor with more
+  // than one group sees all of theirs): show a two-pane layout, a thread
+  // list of groups beside the active conversation, rather than the old
+  // single <select> dropdown — a single-group viewer (most Instructors,
+  // every Student) just gets the one conversation panel, full width.
+  if (availableGroups.length <= 1) return messagesPanel;
+
+  return `
+    <div class="chat-layout">
+      <section class="panel chat-threadlist" aria-label="${t("chat.title")}">
+        ${availableGroups
+          .map(
+            (g) => `
+              <button type="button" class="chat-thread-item ${g.id === state.chatGroupId ? "active" : ""}" onclick="setChatGroup('${escapeJs(g.id)}')">
+                <span class="avatar" aria-hidden="true">${escapeHtml((g.name || "?")[0])}</span>
+                <span class="chat-thread-item-label">
+                  <strong>${escapeHtml(g.name)}</strong>
+                  <small>${escapeHtml(g.course || "")}</small>
+                </span>
+              </button>
+            `,
+          )
+          .join("")}
+      </section>
+      ${messagesPanel}
+    </div>
   `;
 }
 
@@ -1260,7 +1288,7 @@ function settingsView() {
       ${state.settingsError ? `<p class="auth-error">${escapeHtml(state.settingsError)}</p>` : ""}
       ${state.settingsNotice ? `<p class="notice-row m-success">${escapeHtml(state.settingsNotice)}</p>` : ""}
       <section class="panel"><h2>${t("settings.school.heading")}</h2><label>${t("settings.school.name")}<input name="schoolName" value="${escapeHtml(school.name)}" required /></label><label>${t("settings.school.portalUrl")}<input name="portalUrl" value="${escapeHtml(school.portalUrl)}" /></label></section>
-      <section class="panel"><h2>${t("settings.attendance.heading")}</h2><label>${t("settings.attendance.threshold")}<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>${t("settings.attendance.dueSoon")}<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="checkline"><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /> ${t("settings.attendance.familyEmails")}</label></section>
+      <section class="panel"><h2>${t("settings.attendance.heading")}</h2><label>${t("settings.attendance.threshold")}<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>${t("settings.attendance.dueSoon")}<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="switch"><span>${t("settings.attendance.familyEmails")}</span><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /><span class="switch-track"></span></label></section>
       <section class="panel"><h2>${t("settings.uploads.heading")}</h2><label>${t("settings.uploads.limit")}<input name="maxUploadMb" type="number" min="1" value="${school.settings.maxUploadMb}" required /></label><p class="hint">${t("settings.uploads.hint", { link: `<button type="button" onclick="navigate('accounts')">${t("nav.accounts")}</button>` })}</p></section>
       <section class="panel"><h2>${t("settings.careers.heading")}</h2><label>${t("settings.careers.email")}<input name="careersEmail" type="email" value="${escapeHtml(school.settings.careersEmail)}" placeholder="careers@yourschool.com" /></label><p class="hint">${t("settings.careers.hint")}</p></section>
       <div class="toolbar"><button type="submit" ${state.settingsBusy ? "disabled" : ""}>${state.settingsBusy ? t("common.saving") : t("settings.save")}</button></div>

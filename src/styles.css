@@ -118,23 +118,29 @@ select:focus-visible {
 }
 
 .sidebar {
-  background: linear-gradient(190deg, #16232a 0%, #101b20 100%);
-  color: #f8fbfc;
-  padding: 24px 18px;
+  background: var(--panel);
+  color: var(--ink);
+  border-inline-end: 1px solid var(--line);
+  padding: 22px 16px;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 22px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
 }
 
 .brand {
   display: flex;
   gap: 12px;
   align-items: center;
+  padding-inline-start: 6px;
 }
 
 .brand-mark {
-  width: 44px;
-  height: 44px;
+  width: 40px;
+  height: 40px;
   object-fit: contain;
   flex-shrink: 0;
 }
@@ -144,8 +150,8 @@ select:focus-visible {
   height: 44px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
-  background: var(--brand);
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--brand), var(--brand-dark));
   color: #fff;
   font-weight: 800;
 }
@@ -160,14 +166,17 @@ dd,
   color: var(--muted);
 }
 
-.sidebar .brand span,
-.sidebar .security-note span {
-  color: #aebbc1;
+.sidebar .brand span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 nav {
   display: grid;
-  gap: 6px;
+  gap: 4px;
 }
 
 .nav-item {
@@ -177,36 +186,62 @@ nav {
   align-items: center;
   gap: 12px;
   background: transparent;
-  color: #c3d0d5;
+  color: var(--muted);
   border: 1px solid transparent;
-  border-left: 3px solid transparent;
-  border-radius: 8px;
-  font-weight: 600;
+  border-radius: 10px;
+  font-weight: 700;
+  position: relative;
+  padding-inline-start: 14px;
 }
 
 .nav-item span {
   width: 22px;
   text-align: center;
+  color: var(--muted);
 }
 
 .nav-item:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: #fff;
+  background: var(--soft);
+  color: var(--ink);
   transform: none;
   box-shadow: none;
 }
 
 .nav-item.active {
-  background: rgba(31, 122, 114, 0.28);
-  border-left-color: var(--gold);
-  color: #fff;
+  background: var(--brand-light);
+  color: var(--brand-dark);
+}
+
+.nav-item.active span {
+  color: var(--brand-dark);
+}
+
+/* The accent bar that marks the active tab — bleeds slightly past the
+   sidebar's own padding on the "start" edge (left in LTR, right in RTL)
+   and gets its outer corners rounded away from that edge, so it reads
+   like a tab notch rather than a plain border. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px;
+  height: 60%;
+  background: var(--brand);
+  border-radius: 0 4px 4px 0;
+}
+
+[dir="rtl"] .nav-item.active::before {
+  border-radius: 4px 0 0 4px;
 }
 
 .security-note {
   margin-top: auto;
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid var(--line);
+  background: var(--soft);
   padding: 14px;
-  border-radius: 10px;
+  border-radius: 12px;
   display: grid;
   gap: 5px;
 }
@@ -280,7 +315,7 @@ h2 {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(6, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 14px;
 }
 
@@ -299,6 +334,38 @@ h2 {
   min-height: 118px;
   border-top: 3px solid var(--brand);
   transition: box-shadow 0.2s ease, transform 0.2s ease;
+  align-content: start;
+}
+
+.metric-icon {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--brand-light);
+  color: var(--brand-dark);
+  font-size: 16px;
+}
+
+.metric-grid .metric:nth-child(2) .metric-icon {
+  background: color-mix(in srgb, var(--coral) 18%, transparent);
+  color: var(--coral);
+}
+
+.metric-grid .metric:nth-child(3) .metric-icon {
+  background: color-mix(in srgb, var(--gold) 18%, transparent);
+  color: var(--gold);
+}
+
+.metric-grid .metric:nth-child(4) .metric-icon {
+  background: color-mix(in srgb, var(--blue) 18%, transparent);
+  color: var(--blue);
+}
+
+.metric-grid .metric:nth-child(5) .metric-icon {
+  background: color-mix(in srgb, var(--green) 18%, transparent);
+  color: var(--green);
 }
 
 .metric:hover {
@@ -422,6 +489,121 @@ dt {
   gap: 12px;
 }
 
+/* A small CSS-only donut, built from a conic-gradient rather than a chart
+   library — set --donut-value (0-100) and --donut-color inline. Used on
+   the manager dashboard for at-a-glance completion/attendance figures. */
+.donut {
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: conic-gradient(var(--donut-color, var(--brand)) calc(var(--donut-value, 0) * 1%), var(--soft) 0);
+  justify-self: center;
+}
+
+.donut::after {
+  content: attr(data-label);
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: var(--panel);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--ink);
+}
+
+.donut-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 8px 0 4px;
+}
+
+.donut-legend {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.donut-legend span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.donut-legend span::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--dot-color, var(--brand));
+}
+
+/* Toggle switch for boolean settings (see settingsView() in app.js) —
+   replaces a plain checkbox with a pill/thumb control, RTL-aware via
+   inset-inline-start so the thumb slides the correct physical direction
+   automatically. */
+.switch {
+  --switch-w: 42px;
+  --switch-h: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  color: var(--ink);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.switch input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+
+.switch-track {
+  position: relative;
+  width: var(--switch-w);
+  height: var(--switch-h);
+  border-radius: 999px;
+  background: var(--line);
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.switch-track::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: 3px;
+  top: 3px;
+  width: calc(var(--switch-h) - 6px);
+  height: calc(var(--switch-h) - 6px);
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: inset-inline-start 0.15s ease;
+}
+
+.switch input:checked + .switch-track {
+  background: var(--brand);
+}
+
+.switch input:checked + .switch-track::before {
+  inset-inline-start: calc(var(--switch-w) - var(--switch-h) + 3px);
+}
+
+.switch input:focus-visible + .switch-track {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
 .toolbar {
   display: flex;
   gap: 10px;
@@ -457,7 +639,7 @@ table {
 th,
 td {
   padding: 13px 10px;
-  text-align: left;
+  text-align: start;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
 }
@@ -473,7 +655,10 @@ tbody tr:hover {
 th {
   color: var(--muted);
   font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
+  background: var(--soft);
 }
 
 td strong,
@@ -545,7 +730,6 @@ dd {
   margin: 0;
 }
 
-.class-grid,
 .report-grid,
 .settings-grid {
   display: grid;
@@ -553,9 +737,38 @@ dd {
   gap: 20px;
 }
 
+/* Card-grid for groups/assignment-style tiles — auto-fills as many
+   columns as fit rather than a fixed 2-up layout, matching techheroes'
+   responsive card grids. */
+.class-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 18px;
+}
+
 .class-tile {
   display: grid;
   gap: 12px;
+  border-top: 3px solid var(--brand);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.class-tile:hover {
+  box-shadow: var(--shadow);
+  transform: translateY(-2px);
+}
+
+.class-tile > button:last-child {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.class-tile > button:last-child:hover {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
 }
 
 .results article {
@@ -725,7 +938,7 @@ code {
 
 .account-chip div {
   display: grid;
-  text-align: right;
+  text-align: end;
   line-height: 1.3;
 }
 
@@ -1771,7 +1984,7 @@ code {
 
 .modal-box h2 {
   margin: 0;
-  padding-right: 24px;
+  padding-inline-end: 24px;
 }
 
 .modal-box form {
@@ -1813,7 +2026,7 @@ code {
 .modal-close {
   position: absolute;
   top: 12px;
-  right: 12px;
+  inset-inline-end: 12px;
   width: 32px;
   height: 32px;
   min-height: 32px;
@@ -1945,7 +2158,82 @@ code {
   min-width: 120px;
 }
 
-/* Class chat (see chatView() in app.js) */
+/* Group chat (see chatView() in app.js). When a viewer can see more than
+   one group's chat (a Manager, or an Instructor with several groups),
+   .chat-layout puts a thread list of groups beside the active
+   conversation — a two-pane layout instead of a <select> dropdown. A
+   single-group viewer just gets .chat-panel at full width. */
+.chat-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.chat-threadlist {
+  display: grid;
+  gap: 4px;
+  max-height: 560px;
+  overflow-y: auto;
+  align-content: start;
+}
+
+.chat-thread-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  text-align: start;
+  width: 100%;
+}
+
+.chat-thread-item .avatar {
+  width: 34px;
+  height: 34px;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.chat-thread-item-label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.chat-thread-item-label small {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-thread-item:hover {
+  background: var(--soft);
+  transform: none;
+  box-shadow: none;
+}
+
+.chat-thread-item.active {
+  background: var(--brand-light);
+  border-color: var(--brand);
+}
+
+@media (max-width: 900px) {
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .chat-threadlist {
+    max-height: 220px;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(160px, 1fr);
+    overflow-x: auto;
+  }
+}
+
 .chat-panel {
   display: grid;
   gap: 14px;
@@ -1969,6 +2257,7 @@ code {
   background: var(--soft);
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  border-start-start-radius: 4px;
   padding: 10px 14px;
   max-width: 80%;
   justify-self: start;
@@ -1978,6 +2267,8 @@ code {
   background: var(--brand-light);
   border-color: var(--brand);
   justify-self: end;
+  border-start-start-radius: var(--radius);
+  border-end-end-radius: 4px;
 }
 
 .chat-message-meta {
@@ -2005,7 +2296,7 @@ code {
 .chat-delete {
   position: absolute;
   top: 4px;
-  right: 6px;
+  inset-inline-end: 6px;
   background: transparent;
   border: none;
   color: var(--muted);
@@ -2164,27 +2455,8 @@ code {
    the whole stylesheet in logical properties.
    --------------------------------------------------------------------- */
 
-[dir="rtl"] th,
-[dir="rtl"] td {
-  text-align: right;
-}
-
 [dir="rtl"] .auth-card label {
   text-align: right;
-}
-
-[dir="rtl"] .account-chip div {
-  text-align: left;
-}
-
-[dir="rtl"] .nav-item {
-  border-left: 1px solid transparent;
-  border-right: 3px solid transparent;
-}
-
-[dir="rtl"] .nav-item.active {
-  border-left-color: transparent;
-  border-right-color: var(--gold);
 }
 
 [dir="rtl"] .m-age {
@@ -2227,16 +2499,6 @@ code {
 [dir="rtl"] .promo-close {
   right: auto;
   left: 10px;
-}
-
-[dir="rtl"] .modal-close {
-  right: auto;
-  left: 12px;
-}
-
-[dir="rtl"] .chat-delete {
-  right: auto;
-  left: 6px;
 }
 
 [dir="rtl"] .sample-tag {
