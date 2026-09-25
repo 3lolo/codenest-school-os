@@ -1,28 +1,32 @@
-export const roles = ["Super Admin", "School Admin", "Instructor", "Student", "Parent"];
+export const roles = ["Super Admin", "School Admin", "Instructor", "Student"];
 
-// Underlying role values stay as they were (five tiers, unchanged permission
-// logic below) so nothing here or in Supabase RLS has to be migrated. The
-// school only ever talks about three account *types* — Manager, Instructor,
-// Student — so `roleLabel` is what the UI shows instead of the raw role.
-// Super Admin and School Admin are both "Manager" to an end user; Parent
-// keeps its own label since parents are guardians, not an account type an
-// admin issues.
+// Underlying role values stay as they were (four tiers now that Parent is
+// gone) so nothing here or in Supabase RLS has to be migrated further than
+// it already was. The school only ever talks about three account *types*
+// — Manager, Instructor, Student — so `roleLabel` is what the UI shows
+// instead of the raw role. Super Admin and School Admin are both
+// "Manager" to an end user.
 export function roleLabel(role) {
   if (role === "Super Admin" || role === "School Admin") return "Manager";
   return role;
 }
 
+// "classes"/"materials"/"attendance" are no longer their own nav tabs:
+// Groups is the sole class-like container (see groupsView() in app.js),
+// materials are uploaded from a "Upload materials" button on a group's
+// own page, and attendance is taken from that same group page by its own
+// Instructor — there is no school-wide Attendance or Materials tab
+// anymore.
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "groups", "grades", "chat", "profile"],
-  "School Admin": ["dashboard", "instructors", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "groups", "grades", "chat", "profile"],
-  Instructor: ["dashboard", "students", "classes", "assignments", "materials", "attendance", "staffRequests", "accounts", "groups", "grades", "chat", "profile"],
-  Student: ["dashboard", "groups", "materials", "assignments", "grades", "attendance", "chat", "profile"],
-  Parent: ["dashboard", "students", "groups", "assignments", "materials", "attendance", "grades", "chat", "profile"],
+  "Super Admin": ["dashboard", "instructors", "students", "groups", "assignments", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "profile"],
+  "School Admin": ["dashboard", "instructors", "students", "groups", "assignments", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "profile"],
+  Instructor: ["dashboard", "students", "groups", "assignments", "grades", "chat", "staffRequests", "accounts", "profile"],
+  Student: ["dashboard", "groups", "assignments", "grades", "chat", "profile"],
 };
 
 // Manager (Super Admin or School Admin) can issue Manager, Instructor, and
 // Student logins. Instructor can issue Student logins only, and only for
-// students in their own classes (the class scoping itself is enforced by
+// students in their own groups (the group scoping itself is enforced by
 // the caller using filterStudentsForViewer + the server in
 // api/create-account.js, which re-checks everything with the service key).
 // A Manager-issued "Manager" login always becomes the underlying "School
@@ -38,24 +42,31 @@ export function issuableRolesFor(role) {
   return [];
 }
 
-// Can this role create brand-new Instructor / Student / Class / Group /
+// Can this role create brand-new Instructor / Student / Group /
 // Assignment records (not just issue a login for one that already exists)?
 export function canCreateInstructorProfiles(role) {
   return ["Super Admin", "School Admin"].includes(role);
 }
 
-export function canCreateClasses(role) {
-  return ["Super Admin", "School Admin", "Instructor"].includes(role);
+// Groups are the sole class-like container now, and only a Manager can
+// create or edit one — an Instructor is assigned to a group (see
+// `groups.instructor` in supabase/migrations/0011_...sql) but can never
+// create one themselves. RLS enforces the same boundary server-side (the
+// "groups write admin only" policy in that migration), this is just what
+// keeps the "New group" button from ever appearing for an Instructor.
+export function canCreateGroups(role) {
+  return ["Super Admin", "School Admin"].includes(role);
 }
 
 export function canCreateStudentProfiles(role) {
   return ["Super Admin", "School Admin", "Instructor"].includes(role);
 }
 
-// Only staff create assignments and enter grades. Students and Parents see
-// both read-only — RLS enforces the same boundary server-side (see
-// supabase/migrations/0010_grades_and_chat.sql), this is just what keeps
-// the "New assignment" / "Grade" buttons from ever appearing for them.
+// Only staff create assignments and enter grades. Students see both
+// read-only — RLS enforces the same boundary server-side (see
+// supabase/migrations/0010_grades_and_chat.sql and 0011_...sql), this is
+// just what keeps the "New assignment" / "Grade" buttons from ever
+// appearing for them.
 export function canManageAssignments(role) {
   return ["Super Admin", "School Admin", "Instructor"].includes(role);
 }
@@ -63,7 +74,7 @@ export function canManageAssignments(role) {
 // Only a Manager can permanently remove an Instructor or Student record
 // (and their login) outright. An Instructor never gets this — they can
 // only *request* a student's removal from Requests, scoped to their own
-// classes, for a Manager to decide on (see the "removal" staff_requests
+// groups, for a Manager to decide on (see the "removal" staff_requests
 // kind and api/remove-account.js, which re-checks this same rule
 // server-side before ever touching the database).
 export function canRemoveAccounts(role) {
@@ -89,8 +100,7 @@ export function visibleModulesForRole(role, navItems) {
 export function canViewStudent(viewer, student) {
   if (["Super Admin", "School Admin"].includes(viewer.role)) return true;
   if (viewer.role === "Student") return student.id === viewer.studentId;
-  if (viewer.role === "Parent") return viewer.childStudentIds?.includes(student.id);
-  if (viewer.role === "Instructor") return viewer.classIds?.includes(student.classId);
+  if (viewer.role === "Instructor") return viewer.groupIds?.includes(student.groupId);
   return false;
 }
 
@@ -109,4 +119,19 @@ export function safeSearchRowsForViewer(viewer, rows) {
     if (row.moduleId && !canAccessModule(viewer.role, row.moduleId)) return false;
     return true;
   });
+}
+
+// A group's own page shows "Upload materials" and, for Instructors, "Take
+// attendance" — both scoped to that ONE group, never a school-wide tab
+// (see requirements: materials moves onto the group page, and attendance
+// is taken by that group's own Instructor per session). A Manager can do
+// both for any group; an Instructor only for a group they're assigned to.
+export function canManageGroup(viewer, group) {
+  if (["Super Admin", "School Admin"].includes(viewer.role)) return true;
+  if (viewer.role === "Instructor") return group?.instructor === viewer.instructorName;
+  return false;
+}
+
+export function canTakeAttendanceForGroup(viewer, group) {
+  return canManageGroup(viewer, group);
 }

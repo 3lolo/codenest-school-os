@@ -1,9 +1,10 @@
 import {
   canAccessModule,
-  canCreateClasses,
+  canCreateGroups,
   canCreateInstructorProfiles,
   canCreateStudentProfiles,
   canManageAssignments,
+  canManageGroup,
   canManageOpportunities,
   canRemoveAccounts,
   filterStudentsForViewer,
@@ -20,6 +21,7 @@ import {
   signOut as authSignOut,
   storeSession,
 } from "./supabaseAuth.js";
+import { DEFAULT_LANG, LANGS, LANG_LABELS, getLang, isRtl, setLang, t } from "./i18n.js";
 
 const state = {
   role: "Super Admin",
@@ -49,7 +51,8 @@ const state = {
   modalError: "",
   modalNotice: "",
   selectedStudentId: null,
-  studentClassFilter: "",
+  selectedGroupId: null,
+  studentGroupFilter: "",
   staffRequestBusy: null,
   staffRequestNotice: null,
   settingsBusy: false,
@@ -61,8 +64,9 @@ const state = {
   opportunitiesNotice: null,
   opportunityDetail: null,
   theme: "light",
+  lang: DEFAULT_LANG,
   loginMode: null, // "student" | "staff" | null (chooser not yet answered)
-  chatClassId: null,
+  chatGroupId: null,
   chatBusy: false,
   chatError: "",
   chatSendBusy: false,
@@ -78,25 +82,28 @@ const dataSource = {
   error: "",
 };
 
+// Module ids only — labels are looked up through t() at render time so the
+// sidebar re-labels itself instantly when the language changes. "classes"
+// and standalone "materials"/"attendance" tabs are gone: Groups is the one
+// class-like container (see groupsView()/groupDetailView()), materials are
+// uploaded from a group's own page, and attendance is taken there too, by
+// that group's own Instructor — see security.js's canManageGroup().
 const navItems = [
-  ["dashboard", "Dashboard", "grid"],
-  ["instructors", "Instructors", "users"],
-  ["students", "Students", "users"],
-  ["classes", "Classes", "layers"],
-  ["groups", "My Groups", "layers"],
-  ["materials", "Materials", "folder"],
-  ["assignments", "Assignments", "clipboard"],
-  ["grades", "Grades", "chart"],
-  ["attendance", "Attendance", "check"],
-  ["chat", "Chat", "message"],
-  ["staffRequests", "Requests", "message"],
-  ["reports", "Reports", "chart"],
-  ["accounts", "Accounts & Logins", "key"],
-  ["leads", "Contact Requests", "message"],
-  ["reviews", "Reviews", "chart"],
-  ["opportunities", "Work With Us", "briefcase"],
-  ["profile", "Profile", "home"],
-  ["settings", "Settings", "gear"],
+  ["dashboard", "nav.dashboard", "grid"],
+  ["instructors", "nav.instructors", "users"],
+  ["students", "nav.students", "users"],
+  ["groups", "nav.groups", "layers"],
+  ["assignments", "nav.assignments", "clipboard"],
+  ["grades", "nav.grades", "chart"],
+  ["chat", "nav.chat", "message"],
+  ["staffRequests", "nav.staffRequests", "message"],
+  ["reports", "nav.reports", "chart"],
+  ["accounts", "nav.accounts", "key"],
+  ["leads", "nav.leads", "message"],
+  ["reviews", "nav.reviews", "chart"],
+  ["opportunities", "nav.opportunities", "briefcase"],
+  ["profile", "nav.profile", "home"],
+  ["settings", "nav.settings", "gear"],
 ];
 
 // Production defaults. Nothing here is sample/demo content — every list
@@ -125,10 +132,12 @@ let people = {
   instructors: [],
 };
 
-let classes = [];
-let assignments = [];
+// `groups` is the sole class-like container now — it carries every field
+// `classes` used to own (course, instructor, schedule, room, status,
+// completion) plus its own group_id/name. See
+// supabase/migrations/0011_groups_replace_classes_drop_parent.sql.
 let groups = [];
-let groupMembers = [];
+let assignments = [];
 let materials = [];
 let attendanceRecords = [];
 let staffRequests = [];
@@ -158,7 +167,11 @@ function can(view) {
 }
 
 function navigate(view) {
-  if (!can(view)) return;
+  // "groupDetail" is reached only from a group card's own "Open" button
+  // (see openGroupDetail()), never from the sidebar, so it's deliberately
+  // not in `permissions` — real access is already enforced by RLS (a
+  // group you can't see never appears in `groups` to begin with).
+  if (view !== "groupDetail" && !can(view)) return;
   const leavingChat = state.view === "chat" && view !== "chat";
   state.view = view;
   render();
@@ -193,8 +206,8 @@ function currentViewer() {
   return {
     role: state.role,
     studentId: null,
-    childStudentIds: [],
-    classIds: [],
+    instructorName: null,
+    groupIds: [],
   };
 }
 
@@ -207,8 +220,8 @@ function pct(value) {
 }
 
 function badge(value) {
-  const key = value.toLowerCase().replace(/\s+/g, "-");
-  return `<span class="badge ${key}">${value}</span>`;
+  const key = String(value).toLowerCase().replace(/\s+/g, "-");
+  return `<span class="badge ${key}">${escapeHtml(value)}</span>`;
 }
 
 function shell() {
@@ -216,43 +229,44 @@ function shell() {
   return `
     <aside class="sidebar">
       <div class="brand">
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
         <div>
-          <strong>${school.name}</strong>
-          <span>School Operations</span>
+          <strong>${escapeHtml(school.name)}</strong>
+          <span>${t("common.secureAccount")}</span>
         </div>
       </div>
       <nav aria-label="Primary navigation">
-        ${allowedNav.map(([id, label, icon]) => `
-          <button class="nav-item ${state.view === id ? "active" : ""}" onclick="navigate('${id}')">
-            <span aria-hidden="true">${icons[icon]}</span>${label}
+        ${allowedNav.map(([id, labelKey, icon]) => `
+          <button class="nav-item ${state.view === id || (id === "groups" && state.view === "groupDetail") ? "active" : ""}" onclick="navigate('${id}')">
+            <span aria-hidden="true">${icons[icon]}</span>${t(labelKey)}
           </button>
         `).join("")}
       </nav>
       <div class="security-note">
-        <strong>Secure account</strong>
-        <span>${roleLabel(state.role)} · ${allowedNav.length} tabs available to you.</span>
+        <strong>${t("common.secureAccount")}</strong>
+        <span>${roleLabel(state.role)} · ${t("common.tabsAvailable", { count: allowedNav.length })}</span>
         <span>${dataSource.label}</span>
       </div>
     </aside>
     <main class="main">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Academic Year 2026-2027</p>
+          <p class="eyebrow">${t("common.academicYear")}</p>
           <h1>${titleForView()}</h1>
           <small>${dataSource.status}</small>
         </div>
         <label class="search">
-          <span>Search</span>
-          <input type="search" placeholder="Students, classes, assignments" value="${state.query}" oninput="setSearch(this.value)" />
+          <span>${t("common.search")}</span>
+          <input type="search" placeholder="${t("common.searchPlaceholder")}" value="${escapeHtml(state.query)}" oninput="setSearch(this.value)" />
         </label>
         <div class="account-chip">
-          <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
+          ${langSwitcherHtml("topbar-lang")}
+          <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
           <div>
-            <strong>${state.profile?.full_name || state.session?.user?.email || roleLabel(state.role)}</strong>
+            <strong>${escapeHtml(state.profile?.full_name || state.session?.user?.email || roleLabel(state.role))}</strong>
             <span>${roleLabel(state.role)}</span>
           </div>
-          <button onclick="handleSignOut()">Sign out</button>
+          <button onclick="handleSignOut()">${t("common.signOut")}</button>
         </div>
       </header>
       <section id="content" class="content">${content()}</section>
@@ -262,25 +276,26 @@ function shell() {
 }
 
 function titleForView() {
+  const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
+  const isManager = ["Super Admin", "School Admin"].includes(state.role);
+  const selectedGroup = groups.find((g) => g.id === state.selectedGroupId);
   return {
-    dashboard: `${roleLabel(state.role)} Dashboard`,
-    instructors: "Instructor Management",
-    students: state.role === "Parent" ? "Linked Children" : "Student Management",
-    classes: "Courses and Classes",
-    groups: "My Groups",
-    assignments: "Assignment Center",
-    grades: ["Super Admin", "School Admin", "Instructor"].includes(state.role) ? "Gradebook" : "Grades",
-    materials: "Class Materials",
-    attendance: "Attendance",
-    chat: "Class Chat",
-    staffRequests: ["Super Admin", "School Admin"].includes(state.role) ? "Staff Requests" : "Requests to Managers",
-    reports: "Reports",
-    accounts: state.role === "Instructor" ? "Student Logins" : "Accounts & Logins",
-    leads: "Contact Requests",
-    reviews: "Reviews",
-    opportunities: "Work With Us",
-    profile: "My Profile",
-    settings: "School Settings",
+    dashboard: t("dashboard.title", { role: roleLabel(state.role) }),
+    instructors: t("instructors.title"),
+    students: t("students.title"),
+    groups: isStaff ? t("groups.title") : t("groups.mine.title"),
+    groupDetail: selectedGroup ? escapeHtml(selectedGroup.name) : t("groups.title"),
+    assignments: t("assignments.title"),
+    grades: isStaff ? t("nav.gradebook") : t("grades.title"),
+    chat: t("chat.title"),
+    staffRequests: isManager ? t("requests.title") : t("requests.titleMine"),
+    reports: t("reports.title"),
+    accounts: state.role === "Instructor" ? t("accounts.title.instructor") : t("accounts.title"),
+    leads: t("leads.title"),
+    reviews: t("nav.reviews"),
+    opportunities: t("nav.opportunities"),
+    profile: t("profile.title"),
+    settings: t("settings.title"),
   }[state.view];
 }
 
@@ -290,12 +305,10 @@ function content() {
     dashboard: dashboard(),
     instructors: instructorsView(),
     students: students(),
-    classes: classesView(),
     groups: groupsView(),
+    groupDetail: groupDetailView(),
     assignments: assignmentsView(),
     grades: gradesView(),
-    materials: materialsView(),
-    attendance: attendanceView(),
     chat: chatView(),
     staffRequests: staffRequestsView(),
     reports: reportsView(),
@@ -310,7 +323,6 @@ function content() {
 
 function dashboard() {
   if (state.role === "Student") return studentDashboard();
-  if (state.role === "Parent") return parentDashboard();
   if (state.role === "Instructor") return instructorDashboard();
   return adminDashboard();
 }
@@ -330,13 +342,13 @@ function computeActionItems() {
 
   assignments
     .filter((a) => a.total - a.submissions > 0)
-    .forEach((a) => items.push(action("Medium", `${a.total - a.submissions} ${a.className} submissions are ungraded`, "Instructor follow-up")));
+    .forEach((a) => items.push(action("Medium", `${a.total - a.submissions} ${groupName(a.groupId)} submissions are ungraded`, "Instructor follow-up")));
 
-  classes
-    .filter((c) => c.status === "Paused")
-    .forEach((c) => items.push(action("Low", `${c.name} is paused`, "Confirm a resume date")));
+  groups
+    .filter((g) => g.status === "Paused")
+    .forEach((g) => items.push(action("Low", `${g.name} is paused`, "Confirm a resume date")));
 
-  return items.join("") || `<p class="empty">No action items right now.</p>`;
+  return items.join("") || `<p class="empty">${t("dashboard.noActionItems")}</p>`;
 }
 
 function adminDashboard() {
@@ -344,29 +356,29 @@ function adminDashboard() {
   const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
   const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
   const avgAttendance = average(people.students.map((s) => s.attendance));
-  const avgCompletion = average(classes.map((c) => c.completion));
+  const avgCompletion = average(groups.map((g) => g.completion));
   const avgGrade = average(people.students.map((s) => s.avgGrade));
   const retention = people.students.length ? Math.round((activeStudents / people.students.length) * 100) : 0;
 
   return `
     <div class="metric-grid">
-      ${metric("Total students", people.students.length, people.students.length ? "Across all classes" : "No students yet")}
-      ${metric("Active students", activeStudents, people.students.length ? `${retention}% of total` : "—")}
-      ${metric("Active classes", classes.filter((c) => c.status === "Active").length, `${classes.filter((c) => c.status === "Paused").length} paused`)}
-      ${metric("Pending submissions", pending, "Needs grading")}
-      ${metric("Avg. attendance", people.students.length ? `${avgAttendance}%` : "—", `${attendanceAlerts} absence alert${attendanceAlerts === 1 ? "" : "s"}`)}
-      ${metric("Instructors", people.instructors.length, "On staff")}
+      ${metric(t("dashboard.metric.totalStudents"), people.students.length, people.students.length ? t("dashboard.metric.acrossGroups") : t("dashboard.metric.noStudentsYet"))}
+      ${metric(t("dashboard.metric.activeStudents"), activeStudents, people.students.length ? t("dashboard.metric.percentOfTotal", { pct: retention }) : "—")}
+      ${metric(t("dashboard.metric.activeGroups"), groups.filter((g) => g.status === "Active").length, t("dashboard.metric.pausedCount", { count: groups.filter((g) => g.status === "Paused").length }))}
+      ${metric(t("dashboard.metric.pendingSubmissions"), pending, t("dashboard.metric.needsGrading"))}
+      ${metric(t("dashboard.metric.avgAttendance"), people.students.length ? `${avgAttendance}%` : "—", t("dashboard.metric.absenceAlerts", { count: attendanceAlerts }))}
+      ${metric(t("dashboard.metric.instructors"), people.instructors.length, t("dashboard.metric.onStaff"))}
     </div>
     <div class="two-col">
       <section class="panel">
-        <div class="panel-head"><h2>Action Queue</h2><button onclick="navigate('reports')">Review all</button></div>
+        <div class="panel-head"><h2>${t("dashboard.actionQueue")}</h2><button onclick="navigate('reports')">${t("dashboard.reviewAll")}</button></div>
         ${computeActionItems()}
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>Performance Overview</h2><button onclick="navigate('reports')">Export</button></div>
-        ${chartRow("Attendance", avgAttendance)}
-        ${chartRow("Assignment completion", avgCompletion)}
-        ${chartRow("Average grade", avgGrade)}
+        <div class="panel-head"><h2>${t("dashboard.performance")}</h2><button onclick="navigate('reports')">${t("common.export")}</button></div>
+        ${chartRow(t("chart.attendance"), avgAttendance)}
+        ${chartRow(t("chart.completion"), avgCompletion)}
+        ${chartRow(t("chart.avgGrade"), avgGrade)}
       </section>
     </div>
     <div class="two-col">
@@ -383,8 +395,8 @@ function recentAssignmentsPanel() {
   const recent = [...assignments].sort((a, b) => new Date(a.due) - new Date(b.due)).slice(0, 6);
   return `
     <section class="panel">
-      <div class="panel-head"><h2>Recent Assignments</h2><button onclick="navigate('assignments')">Open</button></div>
-      ${recent.map((a) => `<div class="report-row"><span>${a.title} · ${a.className}</span><strong>${badge(a.status)}</strong></div>`).join("") || `<p class="empty">No assignments yet.</p>`}
+      <div class="panel-head"><h2>${t("dashboard.recentAssignments")}</h2><button onclick="navigate('assignments')">${t("common.open")}</button></div>
+      ${recent.map((a) => `<div class="report-row"><span>${escapeHtml(a.title)} · ${escapeHtml(groupName(a.groupId))}</span><strong>${badge(a.status)}</strong></div>`).join("") || `<p class="empty">${t("dashboard.noAssignmentsYet")}</p>`}
     </section>
   `;
 }
@@ -394,28 +406,28 @@ function emptyState(message) {
 }
 
 function instructorDashboard() {
-  // classes / people.students / assignments are already scoped to this
-  // instructor's own classes by Supabase row-level security (see
-  // supabase/migrations/0002_production_rls.sql) — no extra client-side
-  // filtering is needed here.
+  // groups / people.students / assignments are already scoped to this
+  // instructor's own groups by Supabase row-level security (see
+  // supabase/migrations/0011_groups_replace_classes_drop_parent.sql) — no
+  // extra client-side filtering is needed here.
   const activeStudents = people.students.filter((s) => s.status === "Active").length;
   const toGrade = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
   const attendanceAlerts = people.students.filter((s) => s.absences >= school.settings.absenceThreshold).length;
   return `
     <div class="metric-grid">
-      ${metric("Assigned classes", classes.length, classes.map((c) => c.course).join(", ") || "None assigned yet")}
-      ${metric("Students", people.students.length, `${activeStudents} active`)}
-      ${metric("To grade", toGrade, "Ungraded submissions")}
-      ${metric("Attendance alerts", attendanceAlerts, "Follow-up needed")}
+      ${metric(t("dashboard.metric.assignedGroups"), groups.length, groups.map((g) => g.course).join(", ") || t("dashboard.metric.noneAssignedYet"))}
+      ${metric(t("dashboard.metric.students"), people.students.length, t("dashboard.metric.activeCount", { count: activeStudents }))}
+      ${metric(t("dashboard.metric.toGrade"), toGrade, t("dashboard.metric.ungradedSubmissions"))}
+      ${metric(t("dashboard.metric.attendanceAlerts"), attendanceAlerts, t("dashboard.metric.followUpNeeded"))}
     </div>
     <div class="two-col">
       ${assignmentPanel()}
       <section class="panel">
-        <div class="panel-head"><h2>Today</h2><button onclick="navigate('attendance')">Take attendance</button></div>
+        <div class="panel-head"><h2>${t("dashboard.today")}</h2></div>
         ${
-          classes.length
-            ? classes.slice(0, 4).map((item) => `<div class="class-row"><strong>${item.name}</strong><span>${item.schedule} · ${item.room}</span>${pct(item.completion)}</div>`).join("")
-            : `<p class="empty">No classes assigned yet.</p>`
+          groups.length
+            ? groups.slice(0, 4).map((item) => `<div class="class-row"><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.schedule || "—")} · ${escapeHtml(item.room || "—")}</span>${pct(item.completion)}</div>`).join("")
+            : `<p class="empty">${t("dashboard.noGroupsYet")}</p>`
         }
       </section>
     </div>
@@ -426,43 +438,20 @@ function studentDashboard() {
   // Row-level security limits `people.students` to exactly this student's
   // own record once signed in through Supabase.
   const student = people.students[0];
-  if (!student) return emptyState("Your student record hasn't been linked yet. Ask your school for help.");
+  if (!student) return emptyState(t("dashboard.studentNotLinked"));
   const openAssignments = assignments.filter((a) => a.status === "Published").length;
   return `
     <div class="profile-hero">
-      <div class="avatar">${student.first[0]}${student.last[0]}</div>
-      <div><p class="eyebrow">Student Portal</p><h2>${fullName(student)}</h2><span>${student.level} · ${student.email}</span></div>
+      <div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div>
+      <div><p class="eyebrow">${t("dashboard.studentPortal")}</p><h2>${escapeHtml(fullName(student))}</h2><span>${escapeHtml(student.level || "")} · ${escapeHtml(student.email)}</span></div>
     </div>
     <div class="metric-grid">
-      ${metric("Progress", `${student.progress}%`, "Keep it up")}
-      ${metric("Attendance", `${student.attendance}%`, `${student.absences} absence${student.absences === 1 ? "" : "s"}`)}
-      ${metric("Average grade", `${student.avgGrade}%`, "Latest grade")}
-      ${metric("Open assignments", openAssignments, "Published")}
+      ${metric(t("dashboard.metric.progress"), `${student.progress}%`, t("dashboard.metric.keepItUp"))}
+      ${metric(t("dashboard.metric.attendance"), `${student.attendance}%`, t("dashboard.metric.absenceCount", { count: student.absences }))}
+      ${metric(t("dashboard.metric.avgGrade"), `${student.avgGrade}%`, t("dashboard.metric.latestGrade"))}
+      ${metric(t("dashboard.metric.openAssignments"), openAssignments, t("dashboard.metric.published"))}
     </div>
     ${assignmentPanel()}
-  `;
-}
-
-function parentDashboard() {
-  // Row-level security limits `people.students` to this parent's linked
-  // children (see parent_student_links / can_view_student).
-  const children = people.students;
-  const child = children[0];
-  if (!child) return emptyState("No children are linked to your account yet. Ask your school to link them.");
-  const parentName = state.profile?.full_name || "Parent";
-  const initials = parentName.split(/\s+/).map((part) => part[0]).slice(0, 2).join("").toUpperCase() || "P";
-  const openAssignments = assignments.filter((a) => a.status === "Published").length;
-  return `
-    <div class="profile-hero">
-      <div class="avatar">${initials}</div>
-      <div><p class="eyebrow">Parent Portal</p><h2>${parentName}</h2><span>Viewing linked child: ${fullName(child)}${children.length > 1 ? ` (+${children.length - 1} more)` : ""}</span></div>
-    </div>
-    <div class="metric-grid">
-      ${metric("Child attendance", `${child.attendance}%`, "Healthy")}
-      ${metric("Average grade", `${child.avgGrade}%`, "Latest grade published")}
-      ${metric("Assignments", `${openAssignments} open`, "Published")}
-    </div>
-    ${studentProfile(child)}
   `;
 }
 
@@ -471,7 +460,7 @@ function metric(label, value, note) {
 }
 
 function action(level, title, body) {
-  return `<div class="action"><span class="priority">${level}</span><div><strong>${title}</strong><small>${body}</small></div></div>`;
+  return `<div class="action"><span class="priority">${escapeHtml(level)}</span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(body)}</small></div></div>`;
 }
 
 function chartRow(label, value) {
@@ -479,61 +468,60 @@ function chartRow(label, value) {
 }
 
 function recentStudents() {
-  return `<section class="panel"><div class="panel-head"><h2>Recent Students</h2><button onclick="navigate('students')">Open</button></div>${people.students.map(studentCard).join("") || `<p class="empty">No students yet.</p>`}</section>`;
+  return `<section class="panel"><div class="panel-head"><h2>${t("dashboard.recentStudents")}</h2><button onclick="navigate('students')">${t("common.open")}</button></div>${people.students.map(studentCard).join("") || `<p class="empty">${t("dashboard.noStudentsYet")}</p>`}</section>`;
 }
 
 function studentCard(student) {
   return `
     <div class="student-card">
-      <div class="avatar">${student.first[0]}${student.last[0]}</div>
+      <div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div>
       <div class="student-main">
-        <strong>${fullName(student)}</strong>
-        <span>${student.level} · ${student.id}</span>
+        <strong>${escapeHtml(fullName(student))}</strong>
+        <span>${escapeHtml(student.level || "")} · ${escapeHtml(student.id)}</span>
         ${pct(student.progress)}
       </div>
       ${badge(student.status)}
     </div>
   `;
 }
-
 function students() {
   const canAdd = canCreateStudentProfiles(state.role);
-  const viewerClasses = classesForViewer();
+  const viewerGroups = groupsForViewer();
   const isInstructor = state.role === "Instructor";
   let list = filterStudentsForViewer(currentViewer(), people.students);
-  if (state.studentClassFilter) list = list.filter((s) => s.classId === state.studentClassFilter);
+  if (state.studentGroupFilter) list = list.filter((s) => s.groupId === state.studentGroupFilter);
 
   const selected = list.find((s) => s.id === state.selectedStudentId) || list[0];
-  const classFilterOptions = (isInstructor ? viewerClasses : classes)
-    .map((item) => `<option value="${item.id}" ${state.studentClassFilter === item.id ? "selected" : ""}>${item.name}</option>`)
+  const groupFilterOptions = (isInstructor ? viewerGroups : groups)
+    .map((item) => `<option value="${escapeHtml(item.id)}" ${state.studentGroupFilter === item.id ? "selected" : ""}>${escapeHtml(item.name)}</option>`)
     .join("");
 
   return `
     <div class="toolbar">
-      ${canAdd ? `<button onclick="openModal('addStudent')">New student</button>` : ""}
-      <select onchange="setStudentClassFilter(this.value)" aria-label="Filter by class">
-        <option value="">All classes</option>
-        ${classFilterOptions}
+      ${canAdd ? `<button onclick="openModal('addStudent')">${t("students.new")}</button>` : ""}
+      <select onchange="setStudentGroupFilter(this.value)" aria-label="${t("students.filterByGroup")}">
+        <option value="">${t("students.allGroups")}</option>
+        ${groupFilterOptions}
       </select>
-      <button onclick="exportStudentsCsv()">Export CSV</button>
+      <button onclick="exportStudentsCsv()">${t("common.exportCsv")}</button>
     </div>
     <div class="split">
       <section class="panel table-panel">
         <table>
-          <thead><tr><th>Student</th><th>Class</th><th>Attendance</th><th>Grade</th><th>Status</th></tr></thead>
+          <thead><tr><th>${t("students.table.student")}</th><th>${t("students.table.group")}</th><th>${t("students.table.attendance")}</th><th>${t("students.table.grade")}</th><th>${t("students.table.status")}</th></tr></thead>
           <tbody>
             ${
               list
                 .map(
                   (s) =>
-                    `<tr class="${selected?.id === s.id ? "selected-row" : ""}" onclick="selectStudent('${escapeJs(s.id)}')"><td><strong>${fullName(s)}</strong><span>${s.email}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.avgGrade}%</td><td>${badge(s.status)}</td></tr>`,
+                    `<tr class="${selected?.id === s.id ? "selected-row" : ""}" onclick="selectStudent('${escapeJs(s.id)}')"><td><strong>${escapeHtml(fullName(s))}</strong><span>${escapeHtml(s.email)}</span></td><td>${escapeHtml(groupName(s.groupId))}</td><td>${s.attendance}%</td><td>${s.avgGrade}%</td><td>${badge(s.status)}</td></tr>`,
                 )
-                .join("") || `<tr><td colspan="5" class="empty">No students to show yet.</td></tr>`
+                .join("") || `<tr><td colspan="5" class="empty">${t("students.noneYet")}</td></tr>`
             }
           </tbody>
         </table>
       </section>
-      ${selected ? studentProfile(selected) : `<section class="panel"><p class="empty">No students to show yet.</p></section>`}
+      ${selected ? studentProfile(selected) : `<section class="panel"><p class="empty">${t("students.noSelection")}</p></section>`}
     </div>
   `;
 }
@@ -543,16 +531,25 @@ function selectStudent(id) {
   renderContentOnly();
 }
 
-function setStudentClassFilter(classId) {
-  state.studentClassFilter = classId;
+function setStudentGroupFilter(groupId) {
+  state.studentGroupFilter = groupId;
   renderContentOnly();
 }
 
 function exportStudentsCsv() {
   let list = filterStudentsForViewer(currentViewer(), people.students);
-  if (state.studentClassFilter) list = list.filter((s) => s.classId === state.studentClassFilter);
-  const header = ["Student ID", "First name", "Last name", "Email", "Class", "Status", "Attendance %", "Average grade %"];
-  const rows = list.map((s) => [s.id, s.first, s.last, s.email, className(s.classId), s.status, s.attendance, s.avgGrade]);
+  if (state.studentGroupFilter) list = list.filter((s) => s.groupId === state.studentGroupFilter);
+  const header = [
+    t("students.csv.header.id"),
+    t("students.csv.header.first"),
+    t("students.csv.header.last"),
+    t("students.csv.header.email"),
+    t("students.csv.header.group"),
+    t("students.csv.header.status"),
+    t("students.csv.header.attendance"),
+    t("students.csv.header.avgGrade"),
+  ];
+  const rows = list.map((s) => [s.id, s.first, s.last, s.email, groupName(s.groupId), s.status, s.attendance, s.avgGrade]);
   const csv = [header, ...rows]
     .map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(","))
     .join("\n");
@@ -566,10 +563,7 @@ function exportStudentsCsv() {
 }
 
 function studentProfile(student) {
-  if (!student) return `<section class="panel"><p class="empty">No student selected.</p></section>`;
-  const studentGroups = groups.filter((group) =>
-    groupMembers.some((member) => member.groupId === group.id && member.studentId === student.id),
-  );
+  if (!student) return `<section class="panel"><p class="empty">${t("students.noSelection")}</p></section>`;
   const canRemove = canRemoveAccounts(state.role);
   const removeKey = `remove-student-${student.id}`;
   const removeBusy = state.accountsBusy === removeKey;
@@ -577,16 +571,15 @@ function studentProfile(student) {
     <section class="panel profile">
       <div class="profile-hero compact"><div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div><div><h2>${escapeHtml(fullName(student))}</h2><span>${escapeHtml(student.id)} · ${escapeHtml(student.status)}</span></div></div>
       <dl>
-        <div><dt>Email</dt><dd>${escapeHtml(student.email)}</dd></div>
-        <div><dt>Phone</dt><dd>${escapeHtml(student.phone) || "—"}</dd></div>
-        <div><dt>Class</dt><dd>${escapeHtml(className(student.classId))}</dd></div>
-        <div><dt>Group(s)</dt><dd>${studentGroups.length ? studentGroups.map((g) => escapeHtml(g.name)).join(", ") : "—"}</dd></div>
-        <div><dt>Family</dt><dd>${escapeHtml(student.family) || "—"}</dd></div>
-        <div><dt>Parent</dt><dd>${escapeHtml(student.parent) || "—"}</dd></div>
-        <div><dt>Level</dt><dd>${escapeHtml(student.level) || "—"}</dd></div>
-        <div><dt>Notes</dt><dd>${escapeHtml(student.notes) || "—"}</dd></div>
+        <div><dt>${t("students.profile.email")}</dt><dd>${escapeHtml(student.email)}</dd></div>
+        <div><dt>${t("students.profile.phone")}</dt><dd>${escapeHtml(student.phone) || "—"}</dd></div>
+        <div><dt>${t("students.profile.group")}</dt><dd>${escapeHtml(groupName(student.groupId))}</dd></div>
+        <div><dt>${t("students.profile.family")}</dt><dd>${escapeHtml(student.family) || "—"}</dd></div>
+        <div><dt>${t("students.profile.parent")}</dt><dd>${escapeHtml(student.parent) || "—"}</dd></div>
+        <div><dt>${t("students.profile.level")}</dt><dd>${escapeHtml(student.level) || "—"}</dd></div>
+        <div><dt>${t("students.profile.notes")}</dt><dd>${escapeHtml(student.notes) || "—"}</dd></div>
       </dl>
-      ${canRemove ? `<div class="toolbar"><button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? "Removing…" : "Remove student"}</button></div>` : ""}
+      ${canRemove ? `<div class="toolbar"><button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("students.profile.removeStudent")}</button></div>` : ""}
     </section>
   `;
 }
@@ -596,7 +589,7 @@ function studentProfile(student) {
 // this button; they can only request a removal from the Requests tab (see
 // addStaffRequestModal), which a Manager approves through the same API.
 async function handleRemoveStudent(id, name) {
-  if (!window.confirm(`Remove ${name}? This deletes their student record and login. This can't be undone.`)) return;
+  if (!window.confirm(t("students.confirmRemove", { name }))) return;
   const key = `remove-student-${id}`;
   state.accountsBusy = key;
   state.accountsNotice = null;
@@ -605,51 +598,197 @@ async function handleRemoveStudent(id, name) {
     await removeAccountApi({ role: "Student", ref: id });
     if (state.selectedStudentId === id) state.selectedStudentId = null;
     await refreshAfterWrite();
-    state.accountsNotice = { type: "removed", message: `${name} was removed.` };
+    state.accountsNotice = { type: "removed", message: t("students.removedNotice", { name }) };
   } catch (error) {
-    state.accountsNotice = { type: "error", message: error.message };
+    state.accountsNotice = { type: "error", message: error.message || t("students.removeError") };
   } finally {
     state.accountsBusy = null;
     renderContentOnly();
   }
 }
 
-function className(id) {
-  return classes.find((item) => item.id === id)?.name || "Unassigned";
+function groupName(id) {
+  return groups.find((item) => item.id === id)?.name || t("common.unassigned");
 }
 
-function classesView() {
-  const canAddClass = canCreateClasses(state.role);
-  const canAddStudent = canCreateStudentProfiles(state.role);
-  const viewerClasses = classesForViewer();
+function groupsForViewer() {
+  if (state.role === "Instructor") {
+    return groups.filter((item) => item.instructor === state.viewerContext?.instructorName);
+  }
+  return groups;
+}
+
+function studentsInGroup(groupId) {
+  return people.students.filter((student) => student.groupId === groupId);
+}
+
+// ---------------------------------------------------------------------
+// Groups: the sole class-like container. A Manager creates one (with its
+// course/schedule/room and an assigned Instructor); students are added
+// into it directly (students.group_id — see supabase/migrations/0011).
+// Opening a card (openGroupDetail) drills into that one group's own page,
+// which is where "Upload materials" and "Take attendance" live now — see
+// groupDetailView() below.
+// ---------------------------------------------------------------------
+
+function groupsView() {
+  const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
+  const canAdd = canCreateGroups(state.role);
+
+  if (isStaff) {
+    const viewerGroups = groupsForViewer();
+    return `
+      ${canAdd ? `<div class="toolbar"><button onclick="openModal('addGroup')">${t("groups.new")}</button></div>` : ""}
+      <div class="class-grid">
+        ${viewerGroups.map((item) => groupCard(item)).join("") || `<p class="empty">${t("groups.noneYet")}</p>`}
+      </div>
+    `;
+  }
+
+  const student = people.students[0];
+  if (!student) return emptyState(t("dashboard.studentNotLinked"));
+  const myGroups = groups.filter((group) => group.id === student.groupId);
   return `
-    <div class="toolbar">
-      ${canAddClass ? `<button onclick="openModal('addClass')">New class</button>` : ""}
-      ${canAddStudent ? `<button onclick="openModal('addStudent')">Add student</button>` : ""}
-    </div>
     <div class="class-grid">
-      ${classes.map((item) => `
-        <article class="panel class-tile">
-          <div class="panel-head"><h2>${item.name}</h2>${badge(item.status)}</div>
-          <p>${item.course}</p>
-          <dl>
-            <div><dt>Instructor</dt><dd>${item.instructor}</dd></div>
-            <div><dt>Students</dt><dd>${item.students}</dd></div>
-            <div><dt>Schedule</dt><dd>${item.schedule}</dd></div>
-            <div><dt>Room</dt><dd>${item.room}</dd></div>
-          </dl>
-          ${chartRow("Curriculum completion", item.completion)}
-          ${viewerClasses.some((c) => c.id === item.id) ? `<button onclick="openModal('addGroup', { classId: '${escapeJs(item.id)}' })">Manage groups</button>` : ""}
-        </article>
-      `).join("") || `<p class="empty">No classes yet.</p>`}
+      ${myGroups.map((item) => groupCard(item)).join("") || `<p class="empty">${t("groups.notPartOfAny")}</p>`}
     </div>
   `;
+}
+
+function groupCard(group) {
+  const memberCount = studentsInGroup(group.id).length;
+  return `
+    <article class="panel class-tile">
+      <div class="panel-head"><h2>${escapeHtml(group.name)}</h2>${badge(group.status)}</div>
+      <p>${escapeHtml(group.course)}</p>
+      <dl>
+        <div><dt>${t("groups.instructor")}</dt><dd>${escapeHtml(group.instructor) || t("common.unassigned")}</dd></div>
+        <div><dt>${t("groups.students")}</dt><dd>${memberCount}</dd></div>
+        <div><dt>${t("groups.schedule")}</dt><dd>${escapeHtml(group.schedule) || "—"}</dd></div>
+        <div><dt>${t("groups.room")}</dt><dd>${escapeHtml(group.room) || "—"}</dd></div>
+      </dl>
+      ${chartRow(t("groups.completion"), group.completion)}
+      <button onclick="openGroupDetail('${escapeJs(group.id)}')">${t("groups.open")}</button>
+    </article>
+  `;
+}
+
+function openGroupDetail(id) {
+  state.selectedGroupId = id;
+  state.view = "groupDetail";
+  render();
+}
+
+function backToGroups() {
+  state.selectedGroupId = null;
+  navigate("groups");
+}
+
+function groupDetailView() {
+  const group = groups.find((g) => g.id === state.selectedGroupId);
+  if (!group) return emptyState(t("groups.notFound"));
+  const viewer = currentViewer();
+  const manage = canManageGroup(viewer, group);
+  const roster = studentsInGroup(group.id);
+  const groupMaterials = materials.filter((m) => m.groupId === group.id);
+  const recentAttendance = attendanceRecords
+    .filter((r) => r.groupId === group.id)
+    .slice()
+    .sort((a, b) => new Date(b.date) - new Date(a.date))
+    .slice(0, 30);
+
+  return `
+    <button type="button" class="auth-back" onclick="backToGroups()">${backArrow()} ${t("groups.backToGroups")}</button>
+    <section class="panel">
+      <div class="panel-head"><h2>${escapeHtml(group.name)}</h2>${badge(group.status)}</div>
+      <dl>
+        <div><dt>${t("groups.course")}</dt><dd>${escapeHtml(group.course)}</dd></div>
+        <div><dt>${t("groups.instructor")}</dt><dd>${escapeHtml(group.instructor) || t("common.unassigned")}</dd></div>
+        <div><dt>${t("groups.schedule")}</dt><dd>${escapeHtml(group.schedule) || "—"}</dd></div>
+        <div><dt>${t("groups.room")}</dt><dd>${escapeHtml(group.room) || "—"}</dd></div>
+      </dl>
+      ${chartRow(t("groups.completion"), group.completion)}
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>${t("groups.members")}</h2><span>${roster.length}</span></div>
+      <table>
+        <thead><tr><th>${t("students.table.student")}</th><th>${t("students.table.attendance")}</th><th>${t("students.table.grade")}</th><th>${t("common.status")}</th></tr></thead>
+        <tbody>
+          ${
+            roster
+              .map((s) => `<tr><td><strong>${escapeHtml(fullName(s))}</strong><span>${escapeHtml(s.email)}</span></td><td>${s.attendance}%</td><td>${s.avgGrade}%</td><td>${badge(s.status)}</td></tr>`)
+              .join("") || `<tr><td colspan="4" class="empty">${t("dashboard.noStudentsYet")}</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <h2>${t("materials.title")}</h2>
+        ${manage ? `<button onclick="openModal('addMaterial', { groupId: '${escapeJs(group.id)}' })">${t("materials.upload")}</button>` : ""}
+      </div>
+      <table>
+        <thead><tr><th>${t("materials.form.title")}</th><th>${t("materials.uploaded")}</th><th>${t("common.action")}</th></tr></thead>
+        <tbody>
+          ${
+            groupMaterials
+              .map(
+                (m) =>
+                  `<tr><td><strong>${escapeHtml(m.title)}</strong><span>${escapeHtml(m.fileName)}</span></td><td>${m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "—"}</td><td><button onclick="supabaseDownloadFile('${escapeJs(m.filePath)}', '${escapeJs(m.fileName)}')">${t("common.download")}</button></td></tr>`,
+              )
+              .join("") || `<tr><td colspan="3" class="empty">${t("materials.noneYet")}</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+    ${manage ? groupAttendanceSection(group, recentAttendance) : ""}
+  `;
+}
+
+// Attendance lives on the group's own page now: only that group's
+// Instructor (or a Manager) sees this section at all (gated by
+// canManageGroup() above) — no school-wide Attendance tab exists anymore.
+function groupAttendanceSection(group, recentLog) {
+  return `
+    <section class="panel table-panel">
+      <div class="panel-head">
+        <h2>${t("attendance.title")}</h2>
+        <button onclick="openModal('takeAttendance', { groupId: '${escapeJs(group.id)}' })">${t("attendance.take")}</button>
+      </div>
+      <table>
+        <thead><tr><th>${t("attendance.table.date")}</th><th>${t("attendance.table.present")}</th><th>${t("attendance.table.absent")}</th><th>${t("attendance.table.late")}</th><th>${t("attendance.table.excused")}</th></tr></thead>
+        <tbody>
+          ${
+            groupAttendanceBySession(recentLog)
+              .map((session) => `<tr><td>${session.date}</td><td>${session.present}</td><td>${session.absent}</td><td>${session.late}</td><td>${session.excused}</td></tr>`)
+              .join("") || `<tr><td colspan="5" class="empty">${t("attendance.noneYet")}</td></tr>`
+          }
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
+// Collapses individual per-student attendance_records rows into one
+// summary row per date (the caller already scoped `records` to one
+// group), since that's what's useful to scan at a glance; the modal still
+// writes one row per student underneath.
+function groupAttendanceBySession(records) {
+  const sessions = new Map();
+  for (const record of records) {
+    if (!sessions.has(record.date)) {
+      sessions.set(record.date, { date: record.date, present: 0, absent: 0, late: 0, excused: 0 });
+    }
+    const session = sessions.get(record.date);
+    if (session[record.status] !== undefined) session[record.status] += 1;
+  }
+  return [...sessions.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function assignmentsView() {
   const canAdd = canManageAssignments(state.role);
   return `
-    ${canAdd ? `<div class="toolbar"><button onclick="openModal('addAssignment')">New assignment</button></div>` : ""}
+    ${canAdd ? `<div class="toolbar"><button onclick="openModal('addAssignment')">${t("assignments.new")}</button></div>` : ""}
     ${assignmentPanel()}
   `;
 }
@@ -657,94 +796,23 @@ function assignmentsView() {
 function assignmentPanel() {
   return `
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Assignments</h2><span>${assignments.length} total</span></div>
+      <div class="panel-head"><h2>${t("assignments.panelTitle")}</h2><span>${t("assignments.count", { count: assignments.length })}</span></div>
       <table>
-        <thead><tr><th>Assignment</th><th>Class</th><th>Due</th><th>Completion</th><th>Status</th></tr></thead>
+        <thead><tr><th>${t("assignments.table.assignment")}</th><th>${t("assignments.table.group")}</th><th>${t("assignments.table.due")}</th><th>${t("assignments.table.completion")}</th><th>${t("assignments.table.status")}</th></tr></thead>
         <tbody>
-          ${assignments.map((a) => `<tr><td><strong>${a.title}</strong><span>${a.course} · ${a.difficulty} · ${a.maxGrade} pts</span></td><td>${a.className}</td><td>${a.due}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("")}
+          ${assignments.map((a) => `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${escapeHtml(groupName(a.groupId))}</td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("") || `<tr><td colspan="5" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
         </tbody>
       </table>
     </section>
   `;
 }
-
-// ---------------------------------------------------------------------
-// Groups: every role reaches the same underlying `groups`/`group_members`
-// data (already scoped by RLS at fetch time — see 0006 and 0008's
-// can_view_group()), but Staff manages group membership per class while
-// a Student/Parent just sees which group(s) they/their child belong to.
-// ---------------------------------------------------------------------
-
-function groupsView() {
-  const isStaff = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
-
-  if (isStaff) {
-    const viewerClasses = classesForViewer();
-    return `
-      <div class="class-grid">
-        ${
-          viewerClasses
-            .map((item) => {
-              const classGroups = groupsInClass(item.id);
-              return `
-                <article class="panel class-tile">
-                  <div class="panel-head"><h2>${escapeHtml(item.name)}</h2>${badge(`${classGroups.length} group${classGroups.length === 1 ? "" : "s"}`)}</div>
-                  ${
-                    classGroups.length
-                      ? `<ul class="m-compare-list">${classGroups
-                          .map((g) => {
-                            const memberCount = groupMembers.filter((m) => m.groupId === g.id).length;
-                            return `<li>${escapeHtml(g.name)} · ${memberCount} student${memberCount === 1 ? "" : "s"}</li>`;
-                          })
-                          .join("")}</ul>`
-                      : `<p class="empty">No groups yet.</p>`
-                  }
-                  <button onclick="openModal('addGroup', { classId: '${escapeJs(item.id)}' })">Manage groups</button>
-                </article>
-              `;
-            })
-            .join("") || `<p class="empty">No classes yet.</p>`
-        }
-      </div>
-    `;
-  }
-
-  const student = people.students[0];
-  if (!student) return emptyState("No student record is linked to your account yet.");
-  const myGroups = groups.filter((group) =>
-    groupMembers.some((member) => member.groupId === group.id && member.studentId === student.id),
-  );
-  return `
-    <div class="class-grid">
-      ${
-        myGroups
-          .map((group) => {
-            const members = groupMembers
-              .filter((m) => m.groupId === group.id)
-              .map((m) => people.students.find((s) => s.id === m.studentId))
-              .filter(Boolean);
-            return `
-              <article class="panel class-tile">
-                <div class="panel-head"><h2>${escapeHtml(group.name)}</h2></div>
-                <p>${escapeHtml(className(group.classId))}</p>
-                <dl><div><dt>Members</dt><dd>${members.length}</dd></div></dl>
-                <ul class="m-compare-list">${members.map((m) => `<li>${escapeHtml(fullName(m))}${m.id === student.id ? " (you)" : ""}</li>`).join("")}</ul>
-              </article>
-            `;
-          })
-          .join("") || `<p class="empty">You're not part of a group yet — ask your instructor.</p>`
-      }
-    </div>
-  `;
-}
-
 // ---------------------------------------------------------------------
 // Grades: Staff see a gradebook (one row per assignment, "Grade" opens a
 // roster-style entry modal — same pattern as attendance). A Student sees
-// only their own grades; a Parent sees their linked child's — both are
-// already the only rows RLS will ever return them (see the "grades
-// scoped read" policy in 0010_grades_and_chat.sql), this view just
-// presents them.
+// only their own grades — already the only rows RLS will ever return them
+// (see the "grades scoped read" policy in
+// supabase/migrations/0011_groups_replace_classes_drop_parent.sql), this
+// view just presents them.
 // ---------------------------------------------------------------------
 
 function gradesView() {
@@ -753,19 +821,18 @@ function gradesView() {
   if (isStaff) {
     return `
       <section class="panel table-panel">
-        <div class="panel-head"><h2>Gradebook</h2><span>${assignments.length} assignments</span></div>
+        <div class="panel-head"><h2>${t("nav.gradebook")}</h2><span>${t("assignments.count", { count: assignments.length })}</span></div>
         <table>
-          <thead><tr><th>Assignment</th><th>Class</th><th>Due</th><th>Graded</th><th></th></tr></thead>
+          <thead><tr><th>${t("grades.table.assignment")}</th><th>${t("grades.table.group")}</th><th>${t("grades.table.due")}</th><th>${t("grades.table.graded")}</th><th></th></tr></thead>
           <tbody>
             ${
               assignments
                 .map((a) => {
-                  const cls = classes.find((c) => c.name === a.className);
-                  const roster = cls ? studentsInClass(cls.id) : [];
+                  const roster = studentsInGroup(a.groupId);
                   const gradedCount = grades.filter((g) => g.assignmentId === a.id).length;
-                  return `<tr><td><strong>${escapeHtml(a.title)}</strong></td><td>${escapeHtml(a.className)}</td><td>${a.due}</td><td>${gradedCount}/${roster.length}</td><td>${a.id ? `<button onclick="openModal('gradeStudent', { assignmentId: '${escapeJs(a.id)}' })">Grade</button>` : ""}</td></tr>`;
+                  return `<tr><td><strong>${escapeHtml(a.title)}</strong></td><td>${escapeHtml(groupName(a.groupId))}</td><td>${a.due || "—"}</td><td>${gradedCount}/${roster.length}</td><td>${a.id ? `<button onclick="openModal('gradeStudent', { assignmentId: '${escapeJs(a.id)}' })">${t("grades.grade")}</button>` : ""}</td></tr>`;
                 })
-                .join("") || `<tr><td colspan="5" class="empty">No assignments yet.</td></tr>`
+                .join("") || `<tr><td colspan="5" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`
             }
           </tbody>
         </table>
@@ -774,21 +841,21 @@ function gradesView() {
   }
 
   const student = people.students[0];
-  if (!student) return emptyState("No student record is linked to your account yet.");
+  if (!student) return emptyState(t("dashboard.studentNotLinked"));
   const own = grades.filter((g) => g.studentId === student.id);
   return `
     <section class="panel table-panel">
-      <div class="panel-head"><h2>${state.role === "Parent" ? `${escapeHtml(fullName(student))}'s Grades` : "Your Grades"}</h2><span>${own.length} graded</span></div>
+      <div class="panel-head"><h2>${t("grades.yourGrades")}</h2><span>${t("grades.gradedCount", { count: own.length })}</span></div>
       <table>
-        <thead><tr><th>Assignment</th><th>Class</th><th>Score</th><th>Feedback</th></tr></thead>
+        <thead><tr><th>${t("grades.table.assignment")}</th><th>${t("grades.table.group")}</th><th>${t("grades.table.score")}</th><th>${t("grades.table.feedback")}</th></tr></thead>
         <tbody>
           ${
             own
               .map((g) => {
                 const a = assignments.find((item) => item.id === g.assignmentId);
-                return `<tr><td><strong>${a ? escapeHtml(a.title) : "Assignment"}</strong></td><td>${a ? escapeHtml(a.className) : "—"}</td><td>${g.score}/${g.maxScore}</td><td>${g.feedback ? escapeHtml(g.feedback) : "—"}</td></tr>`;
+                return `<tr><td><strong>${a ? escapeHtml(a.title) : "—"}</strong></td><td>${a ? escapeHtml(groupName(a.groupId)) : "—"}</td><td>${g.score}/${g.maxScore}</td><td>${g.feedback ? escapeHtml(g.feedback) : "—"}</td></tr>`;
               })
-              .join("") || `<tr><td colspan="4" class="empty">No grades yet.</td></tr>`
+              .join("") || `<tr><td colspan="4" class="empty">${t("grades.noneYet")}</td></tr>`
           }
         </tbody>
       </table>
@@ -800,38 +867,37 @@ function gradeStudentModal(modal) {
   const assignment = assignments.find((a) => a.id === modal.assignmentId);
   if (!assignment) {
     return `
-      <h2>Grade assignment</h2>
-      <p class="hint">This assignment couldn't be found — it may have just been removed.</p>
-      <div class="modal-actions"><button type="button" onclick="closeModal()">Close</button></div>
+      <h2>${t("grades.grade")}</h2>
+      <p class="hint">${t("grades.modal.notFound")}</p>
+      <div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>
     `;
   }
-  const cls = classes.find((c) => c.name === assignment.className);
-  const roster = cls ? studentsInClass(cls.id) : [];
+  const roster = studentsInGroup(assignment.groupId);
   return `
-    <h2>Grade — ${escapeHtml(assignment.title)}</h2>
-    <p class="hint">${escapeHtml(assignment.className)} · out of ${assignment.maxGrade} pts</p>
+    <h2>${t("grades.modal.title", { title: escapeHtml(assignment.title) })}</h2>
+    <p class="hint">${t("grades.modal.sub", { group: escapeHtml(groupName(assignment.groupId)), max: assignment.maxGrade })}</p>
     ${modalMessages()}
     <form onsubmit="handleSaveGrade(event, '${escapeJs(assignment.id)}')">
       ${gradeRosterRows(assignment, roster)}
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Save grades"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("grades.modal.save")}</button>
       </div>
     </form>
   `;
 }
 
 function gradeRosterRows(assignment, roster) {
-  if (!roster.length) return `<p class="hint">No students in this class yet.</p>`;
+  if (!roster.length) return `<p class="hint">${t("grades.modal.noRoster")}</p>`;
   return `
     <fieldset class="modal-checklist">
-      <legend>Enter each student's score</legend>
+      <legend>${t("grades.modal.legend")}</legend>
       ${roster
         .map((student) => {
           const existing = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
           return `
             <div class="attendance-row">
               <span>${escapeHtml(fullName(student))}</span>
-              <input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="Score" />
+              <input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="${t("grades.table.score")}" />
             </div>
           `;
         })
@@ -855,7 +921,7 @@ async function handleSaveGrade(event, assignmentId) {
       max_score: maxScore,
     }));
   if (!rows.length) {
-    state.modalError = "Enter at least one score before saving.";
+    state.modalError = t("grades.needOneScore");
     render();
     return;
   }
@@ -869,39 +935,40 @@ async function handleSaveGrade(event, assignmentId) {
     navigate("grades");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not save grades. Please try again.";
+    state.modalError = error.message || t("grades.form.saveError");
     render();
   }
 }
 
 // ---------------------------------------------------------------------
-// Class chat: one shared thread per class (see can_access_class_chat() in
-// 0010_grades_and_chat.sql). Messages aren't part of the eager
-// loadFromSupabase() batch — they're loaded per-class, on demand, and
-// refreshed on a short interval only while the Chat tab is actually open
-// (see enterChatView/startChatPolling/stopChatPolling below and their
-// hook in navigate()), so nobody pays for a poll they can't see.
+// Group chat: one shared thread per group (see can_access_group_chat() in
+// supabase/migrations/0011_groups_replace_classes_drop_parent.sql — a
+// Manager can always read AND send in any group's chat). Messages aren't
+// part of the eager loadFromSupabase() batch — they're loaded per-group,
+// on demand, and refreshed on a short interval only while the Chat tab is
+// actually open (see enterChatView/startChatPolling/stopChatPolling below
+// and their hook in navigate()), so nobody pays for a poll they can't see.
 // ---------------------------------------------------------------------
 
-function chatClassesForViewer() {
-  if (["Super Admin", "School Admin", "Instructor"].includes(state.role)) return classesForViewer();
+function chatGroupsForViewer() {
+  if (["Super Admin", "School Admin", "Instructor"].includes(state.role)) return groupsForViewer();
   const student = people.students[0];
   if (!student) return [];
-  const cls = classes.find((c) => c.id === student.classId);
-  return cls ? [cls] : [];
+  const group = groups.find((g) => g.id === student.groupId);
+  return group ? [group] : [];
 }
 
 function chatView() {
-  const availableClasses = chatClassesForViewer();
-  if (!availableClasses.length) {
-    return emptyState("No class chat is available yet.");
+  const availableGroups = chatGroupsForViewer();
+  if (!availableGroups.length) {
+    return emptyState(t("chat.empty"));
   }
-  if (!state.chatClassId || !availableClasses.some((c) => c.id === state.chatClassId)) {
-    state.chatClassId = availableClasses[0].id;
+  if (!state.chatGroupId || !availableGroups.some((g) => g.id === state.chatGroupId)) {
+    state.chatGroupId = availableGroups[0].id;
   }
-  const activeClass = availableClasses.find((c) => c.id === state.chatClassId);
-  const classMessages = chatMessages
-    .filter((m) => m.classId === state.chatClassId)
+  const activeGroup = availableGroups.find((g) => g.id === state.chatGroupId);
+  const groupMessages = chatMessages
+    .filter((m) => m.groupId === state.chatGroupId)
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
   const canModerate = ["Super Admin", "School Admin"].includes(state.role);
   const viewerName = state.profile?.full_name || "";
@@ -909,11 +976,11 @@ function chatView() {
   return `
     <section class="panel chat-panel">
       <div class="panel-head">
-        <h2>${escapeHtml(activeClass?.name || "Class chat")}</h2>
+        <h2>${escapeHtml(activeGroup?.name || t("chat.title"))}</h2>
         ${
-          availableClasses.length > 1
-            ? `<select onchange="setChatClass(this.value)">
-                ${availableClasses.map((c) => `<option value="${c.id}" ${c.id === state.chatClassId ? "selected" : ""}>${escapeHtml(c.name)}</option>`).join("")}
+          availableGroups.length > 1
+            ? `<select onchange="setChatGroup(this.value)">
+                ${availableGroups.map((g) => `<option value="${escapeHtml(g.id)}" ${g.id === state.chatGroupId ? "selected" : ""}>${escapeHtml(g.name)}</option>`).join("")}
               </select>`
             : ""
         }
@@ -921,50 +988,50 @@ function chatView() {
       ${state.chatError ? `<p class="notice-row auth-error">${escapeHtml(state.chatError)}</p>` : ""}
       <div class="chat-thread" id="chat-thread">
         ${
-          classMessages.length
-            ? classMessages
+          groupMessages.length
+            ? groupMessages
                 .map(
                   (m) => `
                   <div class="chat-message ${m.senderName === viewerName && m.senderRole === state.role ? "chat-message-own" : ""}">
                     <div class="chat-message-meta"><strong>${escapeHtml(m.senderName)}</strong><span>${escapeHtml(roleLabel(m.senderRole))} · ${new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
                     <p>${escapeHtml(m.body)}</p>
-                    ${canModerate ? `<button type="button" class="chat-delete" onclick="deleteMessage('${escapeJs(m.id)}')" aria-label="Delete message">&times;</button>` : ""}
+                    ${canModerate ? `<button type="button" class="chat-delete" onclick="deleteMessage('${escapeJs(m.id)}')" aria-label="${t("chat.deleteMessage")}">&times;</button>` : ""}
                   </div>
                 `,
                 )
                 .join("")
-            : `<p class="empty">No messages yet — say hello!</p>`
+            : `<p class="empty">${t("chat.noMessages")}</p>`
         }
       </div>
       <form class="chat-composer" onsubmit="handleSendMessage(event)">
-        <input type="text" name="body" placeholder="Message the class…" maxlength="3900" required autocomplete="off" />
-        <button type="submit" ${state.chatSendBusy ? "disabled" : ""}>${state.chatSendBusy ? "Sending…" : "Send"}</button>
+        <input type="text" name="body" placeholder="${t("chat.placeholder")}" maxlength="3900" required autocomplete="off" />
+        <button type="submit" ${state.chatSendBusy ? "disabled" : ""}>${state.chatSendBusy ? t("common.sending") : t("chat.send")}</button>
       </form>
     </section>
   `;
 }
 
-function setChatClass(classId) {
-  state.chatClassId = classId;
+function setChatGroup(groupId) {
+  state.chatGroupId = groupId;
   renderContentOnly();
-  loadChatMessages(classId).then(renderContentOnly);
+  loadChatMessages(groupId).then(renderContentOnly);
 }
 
 function enterChatView() {
-  const availableClasses = chatClassesForViewer();
-  if (!availableClasses.length) return;
-  if (!state.chatClassId || !availableClasses.some((c) => c.id === state.chatClassId)) {
-    state.chatClassId = availableClasses[0].id;
+  const availableGroups = chatGroupsForViewer();
+  if (!availableGroups.length) return;
+  if (!state.chatGroupId || !availableGroups.some((g) => g.id === state.chatGroupId)) {
+    state.chatGroupId = availableGroups[0].id;
   }
-  loadChatMessages(state.chatClassId).then(renderContentOnly);
+  loadChatMessages(state.chatGroupId).then(renderContentOnly);
   startChatPolling();
 }
 
 function startChatPolling() {
   stopChatPolling();
   chatPollTimer = setInterval(() => {
-    if (state.view !== "chat" || !state.chatClassId) return;
-    loadChatMessages(state.chatClassId, { silent: true }).then(renderContentOnly);
+    if (state.view !== "chat" || !state.chatGroupId) return;
+    loadChatMessages(state.chatGroupId, { silent: true }).then(renderContentOnly);
   }, 4000);
 }
 
@@ -975,8 +1042,8 @@ function stopChatPolling() {
   }
 }
 
-async function loadChatMessages(classId, opts = {}) {
-  if (!hasSupabaseConfig() || !state.session || !classId) return;
+async function loadChatMessages(groupId, opts = {}) {
+  if (!hasSupabaseConfig() || !state.session || !groupId) return;
   if (!opts.silent) {
     state.chatBusy = true;
     state.chatError = "";
@@ -984,7 +1051,7 @@ async function loadChatMessages(classId, opts = {}) {
   const base = config.supabaseUrl.replace(/\/$/, "");
   try {
     const response = await fetch(
-      `${base}/rest/v1/messages?class_id=eq.${encodeURIComponent(classId)}&select=*&order=created_at.asc`,
+      `${base}/rest/v1/messages?group_id=eq.${encodeURIComponent(groupId)}&select=*&order=created_at.asc`,
       {
         headers: {
           apikey: config.supabaseAnonKey,
@@ -996,11 +1063,11 @@ async function loadChatMessages(classId, opts = {}) {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const rows = await response.json();
     chatMessages = chatMessages
-      .filter((m) => m.classId !== classId)
+      .filter((m) => m.groupId !== groupId)
       .concat(
         rows.map((m) => ({
           id: m.id,
-          classId: m.class_id,
+          groupId: m.group_id,
           senderUserId: m.sender_user_id,
           senderName: m.sender_name,
           senderRole: m.sender_role,
@@ -1009,7 +1076,7 @@ async function loadChatMessages(classId, opts = {}) {
         })),
       );
   } catch {
-    if (!opts.silent) state.chatError = "Couldn't load messages right now.";
+    if (!opts.silent) state.chatError = t("chat.couldNotLoad");
   } finally {
     if (!opts.silent) state.chatBusy = false;
   }
@@ -1019,15 +1086,15 @@ async function handleSendMessage(event) {
   event.preventDefault();
   const form = event.target;
   const body = form.body.value.trim();
-  const classId = state.chatClassId;
-  if (!body || !classId) return;
+  const groupId = state.chatGroupId;
+  if (!body || !groupId) return;
   state.chatSendBusy = true;
   state.chatError = "";
   renderContentOnly();
   try {
     await supabaseInsert("messages", [
       {
-        class_id: classId,
+        group_id: groupId,
         sender_user_id: state.session.user.id,
         sender_name: state.profile?.full_name || "",
         sender_role: state.role,
@@ -1035,9 +1102,9 @@ async function handleSendMessage(event) {
       },
     ]);
     form.reset();
-    await loadChatMessages(classId);
+    await loadChatMessages(groupId);
   } catch (error) {
-    state.chatError = error.message || "Could not send your message.";
+    state.chatError = error.message || t("chat.couldNotSend");
   } finally {
     state.chatSendBusy = false;
     renderContentOnly();
@@ -1047,7 +1114,7 @@ async function handleSendMessage(event) {
 }
 
 async function deleteMessage(id) {
-  if (!window.confirm("Delete this message? This can't be undone.")) return;
+  if (!window.confirm(t("chat.confirmDelete"))) return;
   try {
     const base = config.supabaseUrl.replace(/\/$/, "");
     await fetch(`${base}/rest/v1/messages?id=eq.${encodeURIComponent(id)}`, {
@@ -1060,11 +1127,10 @@ async function deleteMessage(id) {
     chatMessages = chatMessages.filter((m) => m.id !== id);
     renderContentOnly();
   } catch {
-    state.chatError = "Could not delete that message.";
+    state.chatError = t("chat.couldNotDelete");
     renderContentOnly();
   }
 }
-
 // ---------------------------------------------------------------------
 // Profile: every signed-in role's own account info, plus a voluntary
 // password change any time (not just the forced first-login flow — see
@@ -1083,22 +1149,22 @@ function profileView() {
       <div><h2>${escapeHtml(viewerName)}</h2><span>${escapeHtml(roleLabel(state.role))}${student ? ` · ${escapeHtml(student.level || "")}` : ""}</span></div>
     </div>
     <section class="panel">
-      <div class="panel-head"><h2>Account details</h2></div>
+      <div class="panel-head"><h2>${t("profile.accountDetails")}</h2></div>
       <dl>
-        <div><dt>Email</dt><dd>${escapeHtml(email)}</dd></div>
-        <div><dt>Role</dt><dd>${escapeHtml(roleLabel(state.role))}</dd></div>
-        ${student ? `<div><dt>Class</dt><dd>${escapeHtml(className(student.classId))}</dd></div>` : ""}
+        <div><dt>${t("common.email")}</dt><dd>${escapeHtml(email)}</dd></div>
+        <div><dt>${t("profile.role")}</dt><dd>${escapeHtml(roleLabel(state.role))}</dd></div>
+        ${student ? `<div><dt>${t("profile.group")}</dt><dd>${escapeHtml(groupName(student.groupId))}</dd></div>` : ""}
       </dl>
     </section>
     <section class="panel">
-      <div class="panel-head"><h2>Change password</h2></div>
+      <div class="panel-head"><h2>${t("profile.changePassword")}</h2></div>
       ${state.profileError ? `<p class="notice-row auth-error">${escapeHtml(state.profileError)}</p>` : ""}
       ${state.profileNotice ? `<p class="notice-row m-success">${escapeHtml(state.profileNotice)}</p>` : ""}
       <form onsubmit="handleChangePassword(event)">
-        <label>New password<input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></label>
-        <label>Confirm new password<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></label>
+        <label>${t("profile.newPassword")}<input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></label>
+        <label>${t("profile.confirmPassword")}<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></label>
         <div class="modal-actions">
-          <button type="submit" ${state.profileBusy ? "disabled" : ""}>${state.profileBusy ? "Saving…" : "Update password"}</button>
+          <button type="submit" ${state.profileBusy ? "disabled" : ""}>${state.profileBusy ? t("common.saving") : t("profile.updatePassword")}</button>
         </div>
       </form>
     </section>
@@ -1113,12 +1179,12 @@ async function handleChangePassword(event) {
   state.profileError = "";
   state.profileNotice = "";
   if (next.length < 8) {
-    state.profileError = "Choose a password with at least 8 characters.";
+    state.profileError = t("auth.passwordTooShort");
     renderContentOnly();
     return;
   }
   if (next !== confirmValue) {
-    state.profileError = "Passwords do not match.";
+    state.profileError = t("auth.passwordMismatch");
     renderContentOnly();
     return;
   }
@@ -1126,70 +1192,14 @@ async function handleChangePassword(event) {
   renderContentOnly();
   try {
     await authChangePassword(config, state.session.access_token, next);
-    state.profileNotice = "Your password has been updated.";
+    state.profileNotice = t("profile.updated");
     form.reset();
   } catch (error) {
-    state.profileError = error.message || "Could not update your password.";
+    state.profileError = error.message || t("errors.generic");
   } finally {
     state.profileBusy = false;
     renderContentOnly();
   }
-}
-
-function attendanceView() {
-  const canTake = canCreateStudentProfiles(state.role) || state.role === "Instructor";
-  const isInstructor = state.role === "Instructor";
-  const viewerClassIds = new Set(classesForViewer().map((item) => item.id));
-  const recentLog = attendanceRecords
-    .filter((record) => !isInstructor || viewerClassIds.has(record.classId))
-    .slice()
-    .sort((a, b) => new Date(b.date) - new Date(a.date))
-    .slice(0, 30);
-
-  return `
-    <div class="toolbar">${canTake ? `<button onclick="openModal('takeAttendance')">Take attendance</button>` : ""}</div>
-    <section class="panel table-panel">
-      <div class="panel-head"><h2>Attendance Watchlist</h2><span>Threshold: ${school.settings.absenceThreshold} absences</span></div>
-      <table>
-        <thead><tr><th>Student</th><th>Class</th><th>Attendance</th><th>Absences</th><th>Late</th><th>Status</th></tr></thead>
-        <tbody>
-          ${people.students.map((s) => `<tr><td><strong>${fullName(s)}</strong><span>${s.parent}</span></td><td>${className(s.classId)}</td><td>${s.attendance}%</td><td>${s.absences}</td><td>${s.late}</td><td>${s.absences >= school.settings.absenceThreshold ? badge("Notify") : badge("Monitor")}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">No students yet.</td></tr>`}
-        </tbody>
-      </table>
-    </section>
-    <section class="panel table-panel">
-      <div class="panel-head"><h2>Recent Attendance Log</h2><span>${recentLog.length} sessions marked</span></div>
-      <table>
-        <thead><tr><th>Date</th><th>Class</th><th>Present</th><th>Absent</th><th>Late</th><th>Excused</th></tr></thead>
-        <tbody>
-          ${
-            groupAttendanceBySession(recentLog)
-              .map(
-                (session) =>
-                  `<tr><td>${session.date}</td><td>${className(session.classId)}</td><td>${session.present}</td><td>${session.absent}</td><td>${session.late}</td><td>${session.excused}</td></tr>`,
-              )
-              .join("") || `<tr><td colspan="6" class="empty">No attendance taken yet — use "Take attendance" above.</td></tr>`
-          }
-        </tbody>
-      </table>
-    </section>
-  `;
-}
-
-// Collapses individual per-student attendance_records rows into one
-// summary row per class/date, since that's what's useful to scan at a
-// glance; the modal below still writes one row per student underneath.
-function groupAttendanceBySession(records) {
-  const sessions = new Map();
-  for (const record of records) {
-    const key = `${record.classId}__${record.date}`;
-    if (!sessions.has(key)) {
-      sessions.set(key, { classId: record.classId, date: record.date, present: 0, absent: 0, late: 0, excused: 0 });
-    }
-    const session = sessions.get(key);
-    if (session[record.status] !== undefined) session[record.status] += 1;
-  }
-  return [...sessions.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 }
 
 function reportsView() {
@@ -1200,11 +1210,11 @@ function reportsView() {
   const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
 
   return `
-    <div class="toolbar"><button onclick="exportReportsCsv()">Export CSV</button></div>
+    <div class="toolbar"><button onclick="exportReportsCsv()">${t("common.exportCsv")}</button></div>
     <div class="report-grid">
-      <section class="panel">${reportBlock("Enrollment", [["Active", activeStudents], ["Paused", pausedStudents], ["Total", people.students.length]])}</section>
-      <section class="panel">${reportBlock("Attendance", [["Average", `${average(people.students.map((s) => s.attendance))}%`], ["At risk", attendanceAlerts], ["Late arrivals", lateArrivals]])}</section>
-      <section class="panel">${reportBlock("Academic", [["Completion", `${average(classes.map((c) => c.completion))}%`], ["Average grade", `${average(people.students.map((s) => s.avgGrade))}%`], ["Ungraded", pending]])}</section>
+      <section class="panel">${reportBlock(t("reports.enrollment"), [[t("reports.active"), activeStudents], [t("reports.paused"), pausedStudents], [t("common.total"), people.students.length]])}</section>
+      <section class="panel">${reportBlock(t("reports.attendance"), [[t("reports.average"), `${average(people.students.map((s) => s.attendance))}%`], [t("reports.atRisk"), attendanceAlerts], [t("reports.lateArrivals"), lateArrivals]])}</section>
+      <section class="panel">${reportBlock(t("reports.academic"), [[t("reports.completion"), `${average(groups.map((g) => g.completion))}%`], [t("reports.avgGrade"), `${average(people.students.map((s) => s.avgGrade))}%`], [t("reports.ungraded"), pending]])}</section>
     </div>
   `;
 }
@@ -1223,16 +1233,16 @@ function exportReportsCsv() {
   const pending = assignments.reduce((sum, a) => sum + Math.max(a.total - a.submissions, 0), 0);
 
   const rows = [
-    ["Section", "Metric", "Value"],
-    ["Enrollment", "Active", activeStudents],
-    ["Enrollment", "Paused", pausedStudents],
-    ["Enrollment", "Total", people.students.length],
-    ["Attendance", "Average", `${average(people.students.map((s) => s.attendance))}%`],
-    ["Attendance", "At risk", attendanceAlerts],
-    ["Attendance", "Late arrivals", lateArrivals],
-    ["Academic", "Completion", `${average(classes.map((c) => c.completion))}%`],
-    ["Academic", "Average grade", `${average(people.students.map((s) => s.avgGrade))}%`],
-    ["Academic", "Ungraded", pending],
+    [t("reports.csv.section"), t("reports.csv.metric"), t("reports.csv.value")],
+    [t("reports.enrollment"), t("reports.active"), activeStudents],
+    [t("reports.enrollment"), t("reports.paused"), pausedStudents],
+    [t("reports.enrollment"), t("common.total"), people.students.length],
+    [t("reports.attendance"), t("reports.average"), `${average(people.students.map((s) => s.attendance))}%`],
+    [t("reports.attendance"), t("reports.atRisk"), attendanceAlerts],
+    [t("reports.attendance"), t("reports.lateArrivals"), lateArrivals],
+    [t("reports.academic"), t("reports.completion"), `${average(groups.map((g) => g.completion))}%`],
+    [t("reports.academic"), t("reports.avgGrade"), `${average(people.students.map((s) => s.avgGrade))}%`],
+    [t("reports.academic"), t("reports.ungraded"), pending],
   ];
   const csv = rows.map((row) => row.map((value) => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -1249,11 +1259,11 @@ function settingsView() {
     <form class="settings-grid" onsubmit="handleSaveSettings(event)">
       ${state.settingsError ? `<p class="auth-error">${escapeHtml(state.settingsError)}</p>` : ""}
       ${state.settingsNotice ? `<p class="notice-row m-success">${escapeHtml(state.settingsNotice)}</p>` : ""}
-      <section class="panel"><h2>School</h2><label>School name<input name="schoolName" value="${escapeHtml(school.name)}" required /></label><label>Portal URL<input name="portalUrl" value="${escapeHtml(school.portalUrl)}" /></label></section>
-      <section class="panel"><h2>Attendance &amp; Assignments</h2><label>Absence threshold<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>Due soon hours<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="checkline"><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /> Parent assignment emails</label></section>
-      <section class="panel"><h2>Uploads</h2><label>Upload limit MB<input name="maxUploadMb" type="number" min="1" value="${school.settings.maxUploadMb}" required /></label><p class="hint">Issue or reset an individual instructor/student username and password from <button type="button" onclick="navigate('accounts')">Accounts &amp; Logins</button>.</p></section>
-      <section class="panel"><h2>Work With Us</h2><label>Careers email<input name="careersEmail" type="email" value="${escapeHtml(school.settings.careersEmail)}" placeholder="careers@yourschool.com" /></label><p class="hint">Shown on every opportunity's detail page as where applicants should send their CV and cover letter. Leave blank to point applicants at the contact form instead.</p></section>
-      <div class="toolbar"><button type="submit" ${state.settingsBusy ? "disabled" : ""}>${state.settingsBusy ? "Saving…" : "Save changes"}</button></div>
+      <section class="panel"><h2>${t("settings.school.heading")}</h2><label>${t("settings.school.name")}<input name="schoolName" value="${escapeHtml(school.name)}" required /></label><label>${t("settings.school.portalUrl")}<input name="portalUrl" value="${escapeHtml(school.portalUrl)}" /></label></section>
+      <section class="panel"><h2>${t("settings.attendance.heading")}</h2><label>${t("settings.attendance.threshold")}<input name="absenceThreshold" type="number" min="1" value="${school.settings.absenceThreshold}" required /></label><label>${t("settings.attendance.dueSoon")}<input name="dueSoonHours" type="number" min="1" value="${school.settings.dueSoonHours}" required /></label><label class="checkline"><input name="parentAssignmentEmails" type="checkbox" ${school.settings.parentAssignmentEmails ? "checked" : ""} /> ${t("settings.attendance.familyEmails")}</label></section>
+      <section class="panel"><h2>${t("settings.uploads.heading")}</h2><label>${t("settings.uploads.limit")}<input name="maxUploadMb" type="number" min="1" value="${school.settings.maxUploadMb}" required /></label><p class="hint">${t("settings.uploads.hint", { link: `<button type="button" onclick="navigate('accounts')">${t("nav.accounts")}</button>` })}</p></section>
+      <section class="panel"><h2>${t("settings.careers.heading")}</h2><label>${t("settings.careers.email")}<input name="careersEmail" type="email" value="${escapeHtml(school.settings.careersEmail)}" placeholder="careers@yourschool.com" /></label><p class="hint">${t("settings.careers.hint")}</p></section>
+      <div class="toolbar"><button type="submit" ${state.settingsBusy ? "disabled" : ""}>${state.settingsBusy ? t("common.saving") : t("settings.save")}</button></div>
     </form>
   `;
 }
@@ -1262,20 +1272,19 @@ function searchResults() {
   const term = state.query;
   const viewer = currentViewer();
   const rows = safeSearchRowsForViewer(viewer, [
-    ...people.students.map((s) => ({ type: "Student", title: fullName(s), detail: `${s.email} · ${className(s.classId)}`, student: s, moduleId: "students" })),
-    ...people.instructors.map((i) => ({ type: "Instructor", title: i.name, detail: `${i.email} · ${i.classes.join(", ")}`, staffOnly: true })),
-    ...classes.map((c) => ({ type: "Class", title: c.name, detail: `${c.course} · ${c.instructor}`, moduleId: "classes" })),
-    ...assignments.map((a) => ({ type: "Assignment", title: a.title, detail: `${a.course} · due ${a.due}`, moduleId: "assignments" })),
+    ...people.students.map((s) => ({ type: t("search.type.student"), title: fullName(s), detail: `${s.email} · ${groupName(s.groupId)}`, student: s, moduleId: "students" })),
+    ...people.instructors.map((i) => ({ type: t("search.type.instructor"), title: i.name, detail: `${i.email} · ${(i.classes || []).join(", ")}`, staffOnly: true })),
+    ...groups.map((g) => ({ type: t("search.type.group"), title: g.name, detail: `${g.course} · ${g.instructor || ""}`, moduleId: "groups" })),
+    ...assignments.map((a) => ({ type: t("search.type.assignment"), title: a.title, detail: `${a.course} · ${a.due || ""}`, moduleId: "assignments" })),
   ]).filter((row) => `${row.type} ${row.title} ${row.detail}`.toLowerCase().includes(term));
 
   return `
     <section class="panel">
-      <div class="panel-head"><h2>Search Results</h2><span>${rows.length} matches</span></div>
-      <div class="results">${rows.map((row) => `<article><span>${row.type}</span><strong>${row.title}</strong><small>${row.detail}</small></article>`).join("") || `<p class="empty">No matches found.</p>`}</div>
+      <div class="panel-head"><h2>${t("search.title")}</h2><span>${t("search.matches", { count: rows.length })}</span></div>
+      <div class="results">${rows.map((row) => `<article><span>${escapeHtml(row.type)}</span><strong>${escapeHtml(row.title)}</strong><small>${escapeHtml(row.detail)}</small></article>`).join("") || `<p class="empty">${t("search.noMatches")}</p>`}</div>
     </section>
   `;
 }
-
 function hasSupabaseConfig() {
   return Boolean(config.supabaseUrl && config.supabaseAnonKey && !config.supabaseUrl.includes("your-project"));
 }
@@ -1301,8 +1310,8 @@ async function supabaseSelect(table, select = "*", token) {
 // Generic authenticated write helpers used by every "Add ..." form below.
 // These insert/update directly against PostgREST with the signed-in
 // user's own access token, relying entirely on the RLS policies in the
-// Supabase migrations (0002-0006) to decide who is actually allowed to do
-// what — the same policies that already govern reads.
+// Supabase migrations to decide who is actually allowed to do what — the
+// same policies that already govern reads.
 async function supabaseInsert(table, rows) {
   if (!state.session) throw new Error("Sign in and try again.");
   const base = config.supabaseUrl.replace(/\/$/, "");
@@ -1349,9 +1358,9 @@ function friendlyDuplicateMessage(body) {
 }
 
 // Insert-or-update in one call, keyed on `onConflict` columns — used for
-// attendance, where re-submitting the same class/date should overwrite
-// that day's marks instead of creating duplicate rows (see the `unique`
-// constraint in 0007_staff_requests_attendance.sql).
+// attendance/grades, where re-submitting should overwrite existing rows
+// instead of creating duplicates (see the `unique` constraints in the
+// Supabase migrations).
 async function supabaseUpsert(table, rows, onConflict) {
   if (!state.session) throw new Error("Sign in and try again.");
   const base = config.supabaseUrl.replace(/\/$/, "");
@@ -1424,17 +1433,11 @@ function nextRefId(prefix, existingIds) {
 // whatever was already in memory (so a successful earlier load, or data
 // you just wrote and are re-fetching, never gets wiped out and replaced
 // with nothing) while every table that *did* load refreshes normally.
-// This is also why a newly-added row could previously seem to
-// "disappear": before this, a single failing table (e.g. `assignments`,
-// which wasn't wrapped) aborted the entire refresh via Promise.all,
-// silently discarding every table's fresh data — including the row you
-// just added — and leaving the whole dashboard on stale, pre-write data
-// with no visible error beyond a small "Demo fallback" label.
 async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   const failures = [];
-  const TOTAL_TABLES = 11; // must match the number of safeSelect(...) calls below
+  const TOTAL_TABLES = 9; // must match the number of safeSelect(...) calls below
   const safeSelect = (table, select = "*") =>
     supabaseSelect(table, select, token).catch((error) => {
       failures.push({ table, message: error.message || String(error) });
@@ -1446,10 +1449,8 @@ async function loadFromSupabase(token) {
       settingsRows,
       studentRows,
       instructorRows,
-      classRows,
-      assignmentRows,
       groupRows,
-      groupMemberRows,
+      assignmentRows,
       materialRows,
       attendanceRows,
       staffRequestRows,
@@ -1458,10 +1459,8 @@ async function loadFromSupabase(token) {
       safeSelect("school_settings"),
       safeSelect("students"),
       safeSelect("instructors"),
-      safeSelect("classes"),
-      safeSelect("assignments"),
       safeSelect("groups"),
-      safeSelect("group_members"),
+      safeSelect("assignments"),
       safeSelect("materials"),
       safeSelect("attendance_records"),
       safeSelect("staff_requests"),
@@ -1494,7 +1493,7 @@ async function loadFromSupabase(token) {
         level: student.level,
         family: student.family,
         parent: student.parent_name,
-        classId: student.class_id,
+        groupId: student.group_id,
         progress: student.progress,
         attendance: student.attendance,
         avgGrade: student.avg_grade,
@@ -1510,12 +1509,11 @@ async function loadFromSupabase(token) {
       })),
     };
 
-    classes = classRows === null ? classes : classRows.map((item) => ({
-      id: item.class_id,
+    groups = groupRows === null ? groups : groupRows.map((item) => ({
+      id: item.group_id,
       name: item.name,
       course: item.course,
       instructor: item.instructor,
-      students: item.student_count,
       schedule: item.schedule,
       room: item.room,
       status: item.status,
@@ -1526,8 +1524,7 @@ async function loadFromSupabase(token) {
       id: assignment.id,
       title: assignment.title,
       course: assignment.course,
-      className: assignment.class_name,
-      groupId: assignment.group_id || null,
+      groupId: assignment.group_id,
       due: assignment.due_date,
       status: assignment.status,
       submissions: assignment.submissions,
@@ -1536,21 +1533,9 @@ async function loadFromSupabase(token) {
       difficulty: assignment.difficulty,
     }));
 
-    groups = groupRows === null ? groups : groupRows.map((group) => ({
-      id: group.group_id,
-      name: group.name,
-      classId: group.class_id,
-    }));
-
-    groupMembers = groupMemberRows === null ? groupMembers : groupMemberRows.map((member) => ({
-      groupId: member.group_id,
-      studentId: member.student_id,
-    }));
-
     materials = materialRows === null ? materials : materialRows.map((material) => ({
       id: material.id,
       title: material.title,
-      classId: material.class_id,
       groupId: material.group_id,
       filePath: material.file_path,
       fileName: material.file_name,
@@ -1560,7 +1545,7 @@ async function loadFromSupabase(token) {
     attendanceRecords = attendanceRows === null ? attendanceRecords : attendanceRows.map((record) => ({
       id: record.id,
       studentId: record.student_id,
-      classId: record.class_id,
+      groupId: record.group_id,
       date: record.session_date,
       status: record.status,
     }));
@@ -1618,7 +1603,6 @@ async function loadFromSupabase(token) {
     dataSource.error = error.message;
   }
 }
-
 function renderContentOnly() {
   document.querySelector("#content").innerHTML = content();
 }
@@ -1653,9 +1637,10 @@ function setupScrollReveal() {
 }
 
 // ---------------------------------------------------------------------
-// Dashboard modals: Add Class, Add Instructor, Add Student, Add Manager,
-// Add Group, Add Material, Add Assignment. One small overlay system reused
-// by all of them instead of a separate dialog implementation each.
+// Dashboard modals: Add Group, Add Instructor, Add Student, Add Manager,
+// Add Material, Add Assignment, Take Attendance, Grade Student, Staff
+// Request, Add Opportunity. One small overlay system reused by all of
+// them instead of a separate dialog implementation each.
 // ---------------------------------------------------------------------
 
 function openModal(type, extra = {}) {
@@ -1674,24 +1659,9 @@ function closeModal() {
   render();
 }
 
-function classesForViewer() {
-  if (state.role === "Instructor") {
-    return classes.filter((item) => item.instructor === state.viewerContext?.instructorName);
-  }
-  return classes;
-}
-
-function studentsInClass(classId) {
-  return people.students.filter((student) => student.classId === classId);
-}
-
-function groupsInClass(classId) {
-  return groups.filter((group) => group.classId === classId);
-}
-
 async function refreshAfterWrite() {
   await loadFromSupabase(state.session?.access_token);
-  recomputeInstructorClassIds();
+  recomputeInstructorGroupIds();
   if (state.accountsDirectory) await loadAccountsDirectory();
 }
 
@@ -1700,7 +1670,7 @@ function modalHost() {
   return `
     <div class="modal-overlay" onclick="if (event.target === this) closeModal()">
       <div class="modal-box" role="dialog" aria-modal="true">
-        <button type="button" class="modal-close" onclick="closeModal()" aria-label="Close">&times;</button>
+        <button type="button" class="modal-close" onclick="closeModal()" aria-label="${t("common.close")}">&times;</button>
         ${modalBody(state.modal)}
       </div>
     </div>
@@ -1709,29 +1679,27 @@ function modalHost() {
 
 function modalMessages() {
   return `
-    ${state.modalError ? `<p class="notice-row auth-error">${state.modalError}</p>` : ""}
-    ${state.modalNotice ? `<p class="notice-row m-success">${state.modalNotice}</p>` : ""}
+    ${state.modalError ? `<p class="notice-row auth-error">${escapeHtml(state.modalError)}</p>` : ""}
+    ${state.modalNotice ? `<p class="notice-row m-success">${escapeHtml(state.modalNotice)}</p>` : ""}
   `;
 }
 
 function modalBody(modal) {
   switch (modal.type) {
-    case "addClass":
-      return addClassModal();
+    case "addGroup":
+      return addGroupModal();
     case "addInstructor":
       return addInstructorModal();
     case "addStudent":
       return addStudentModal(modal);
     case "addManager":
       return addManagerModal();
-    case "addGroup":
-      return addGroupModal(modal);
     case "addMaterial":
-      return addMaterialModal();
+      return addMaterialModal(modal);
     case "addAssignment":
       return addAssignmentModal();
     case "takeAttendance":
-      return addAttendanceModal();
+      return addAttendanceModal(modal);
     case "gradeStudent":
       return gradeStudentModal(modal);
     case "addStaffRequest":
@@ -1743,34 +1711,31 @@ function modalBody(modal) {
   }
 }
 
-function addClassModal() {
-  const isInstructor = state.role === "Instructor";
-  if (!isInstructor && people.instructors.length === 0) {
+// Manager-only (see security.js's canCreateGroups) — an Instructor is
+// assigned to a group here but can never create one themselves.
+function addGroupModal() {
+  if (people.instructors.length === 0) {
     return emptyDependencyNotice(
-      "Add a class",
-      "You need at least one instructor before you can create a class — add one first, then come back to create the class and assign it to them.",
-      "Add an instructor",
+      t("groups.needInstructorTitle"),
+      t("groups.needInstructorBody"),
+      t("groups.addInstructorCta"),
       "addInstructor",
     );
   }
   const instructorOptions = people.instructors
-    .map((instructor) => `<option value="${instructor.name}">${instructor.name}</option>`)
+    .map((instructor) => `<option value="${escapeHtml(instructor.name)}">${escapeHtml(instructor.name)}</option>`)
     .join("");
   return `
-    <h2>Add a class</h2>
+    <h2>${t("groups.new")}</h2>
     ${modalMessages()}
-    <form onsubmit="handleAddClass(event)">
-      <label>Class name<input type="text" name="name" required /></label>
-      <label>Course / subject<input type="text" name="course" required /></label>
-      ${
-        isInstructor
-          ? `<input type="hidden" name="instructor" value="${escapeHtml(state.viewerContext?.instructorName || "")}" /><p class="hint">Instructor: ${state.viewerContext?.instructorName || "—"}</p>`
-          : `<label>Instructor<select name="instructor" required><option value="">Choose...</option>${instructorOptions}</select></label>`
-      }
-      <label>Schedule<input type="text" name="schedule" placeholder="e.g. Tue &amp; Thu 5-6pm" /></label>
-      <label>Room<input type="text" name="room" placeholder="e.g. Room A / Online" /></label>
+    <form onsubmit="handleAddGroup(event)">
+      <label>${t("groups.form.name")}<input type="text" name="name" required /></label>
+      <label>${t("groups.form.course")}<input type="text" name="course" required /></label>
+      <label>${t("groups.form.instructor")}<select name="instructor" required><option value="">${t("groups.form.instructor.choose")}</option>${instructorOptions}</select></label>
+      <label>${t("groups.form.schedule")}<input type="text" name="schedule" placeholder="${t("groups.form.schedule.placeholder")}" /></label>
+      <label>${t("groups.form.room")}<input type="text" name="room" placeholder="${t("groups.form.room.placeholder")}" /></label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create class"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("groups.form.create")}</button>
       </div>
     </form>
   `;
@@ -1778,15 +1743,15 @@ function addClassModal() {
 
 function addInstructorModal() {
   return `
-    <h2>Add an instructor</h2>
-    <p class="hint">Creates a real instructor record. Leave "issue a login now" checked to also give them a username and password right away.</p>
+    <h2>${t("instructors.form.submit")}</h2>
+    <p class="hint">${t("instructors.form.hint")}</p>
     ${modalMessages()}
     <form onsubmit="handleAddInstructor(event)">
-      <label>Full name<input type="text" name="name" required /></label>
-      <label>Email<input type="email" name="email" required /></label>
-      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> Issue a login now</label>
+      <label>${t("instructors.form.name")}<input type="text" name="name" required /></label>
+      <label>${t("instructors.form.email")}<input type="email" name="email" required /></label>
+      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> ${t("instructors.form.issueLogin")}</label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add instructor"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("instructors.form.submit")}</button>
       </div>
     </form>
   `;
@@ -1794,32 +1759,30 @@ function addInstructorModal() {
 
 function addStudentModal() {
   const isInstructor = state.role === "Instructor";
-  const availableClasses = classesForViewer();
-  if (availableClasses.length === 0) {
+  const availableGroups = groupsForViewer();
+  if (availableGroups.length === 0) {
     return emptyDependencyNotice(
-      "Add a student",
-      isInstructor
-        ? "You need at least one of your own classes before you can add a student — create a class first, then come back to add the student to it."
-        : "You need at least one class before you can add a student — create a class first, then come back to add the student to it.",
-      "Add a class",
-      "addClass",
+      t("students.new"),
+      t("groups.needInstructorBody"),
+      t("groups.new"),
+      "addGroup",
     );
   }
-  const classOptions = availableClasses
-    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+  const groupOptions = availableGroups
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
     .join("");
   return `
-    <h2>Add a student</h2>
-    ${isInstructor ? `<p class="hint">You can only add students to your own classes.</p>` : ""}
+    <h2>${t("students.new")}</h2>
+    ${isInstructor ? `<p class="hint">${t("students.instructorHint")}</p>` : ""}
     ${modalMessages()}
     <form onsubmit="handleAddStudent(event)">
-      <label>First name<input type="text" name="firstName" required /></label>
-      <label>Last name<input type="text" name="lastName" required /></label>
-      <label>Email<input type="email" name="email" required /></label>
-      <label>Class<select name="classId" required><option value="">Choose...</option>${classOptions}</select></label>
-      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> Issue a login now</label>
+      <label>${t("students.csv.header.first")}<input type="text" name="firstName" required /></label>
+      <label>${t("students.csv.header.last")}<input type="text" name="lastName" required /></label>
+      <label>${t("common.email")}<input type="email" name="email" required /></label>
+      <label>${t("groups.title")}<select name="groupId" required><option value="">${t("groups.form.instructor.choose")}</option>${groupOptions}</select></label>
+      <label class="checkline"><input type="checkbox" name="issueLogin" checked /> ${t("instructors.form.issueLogin")}</label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add student"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("students.new")}</button>
       </div>
     </form>
   `;
@@ -1827,197 +1790,121 @@ function addStudentModal() {
 
 function addManagerModal() {
   return `
-    <h2>Add a manager</h2>
-    <p class="hint">Gives someone full school-operations access, the same as your own account.</p>
+    <h2>${t("addManager.title")}</h2>
+    <p class="hint">${t("addManager.hint")}</p>
     ${modalMessages()}
     <form onsubmit="handleAddManager(event)">
-      <label>Full name<input type="text" name="name" required /></label>
-      <label>Email<input type="email" name="email" required /></label>
+      <label>${t("instructors.form.name")}<input type="text" name="name" required /></label>
+      <label>${t("instructors.form.email")}<input type="email" name="email" required /></label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Add manager"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("addManager.submit")}</button>
       </div>
     </form>
   `;
 }
 
-function addGroupModal(modal) {
-  const classId = modal.classId;
-  const cls = classes.find((item) => item.id === classId);
-  const roster = studentsInClass(classId);
-  const existing = groupsInClass(classId);
+// Opened from a group's own page (groupDetailView) — the group is already
+// known, so there's no group picker here anymore (materials are no longer
+// split across a class + an optional sub-group).
+function addMaterialModal(modal) {
+  const group = groups.find((g) => g.id === modal.groupId);
   return `
-    <h2>Groups — ${cls ? cls.name : ""}</h2>
+    <h2>${t("materials.upload")}</h2>
+    <p class="hint">${escapeHtml(group?.name || "")}</p>
     ${modalMessages()}
-    <div class="modal-existing-list">
-      ${
-        existing.length
-          ? existing
-              .map((group) => {
-                const members = groupMembers.filter((m) => m.groupId === group.id).map((m) => m.studentId);
-                const names = people.students.filter((s) => members.includes(s.id)).map(fullName);
-                return `<article class="modal-existing-row"><strong>${group.name}</strong><span>${names.join(", ") || "No students yet"}</span></article>`;
-              })
-              .join("")
-          : `<p class="hint">No groups yet for this class.</p>`
-      }
-    </div>
-    <form onsubmit="handleAddGroup(event, '${escapeJs(classId)}')">
-      <label>New group name<input type="text" name="name" required /></label>
-      <fieldset class="modal-checklist">
-        <legend>Students in this class</legend>
-        ${
-          roster
-            .map((student) => `<label class="checkline"><input type="checkbox" name="members" value="${student.id}" /> ${fullName(student)}</label>`)
-            .join("") || `<p class="hint">No students in this class yet.</p>`
-        }
-      </fieldset>
+    <form onsubmit="handleAddMaterial(event, '${escapeJs(modal.groupId)}')">
+      <label>${t("materials.form.title")}<input type="text" name="title" required /></label>
+      <label>${t("materials.form.file")}<input type="file" name="file" required /></label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create group"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.uploading") : t("materials.form.submit")}</button>
       </div>
     </form>
   `;
-}
-
-function addMaterialModal() {
-  const availableClasses = classesForViewer();
-  if (availableClasses.length === 0) {
-    return emptyDependencyNotice(
-      "Upload material",
-      "You need at least one class before you can upload material for it — create a class first.",
-      "Add a class",
-      "addClass",
-    );
-  }
-  const classOptions = availableClasses
-    .map((item) => `<option value="${item.id}">${item.name}</option>`)
-    .join("");
-  return `
-    <h2>Upload material</h2>
-    ${modalMessages()}
-    <form onsubmit="handleAddMaterial(event)">
-      <label>Title<input type="text" name="title" required /></label>
-      <label>Class<select name="classId" required onchange="renderModalGroupOptions(this.value)"><option value="">Choose...</option>${classOptions}</select></label>
-      <label>Share with (optional)<select name="groupId" id="material-group-select"><option value="">Whole class</option></select></label>
-      <label>File<input type="file" name="file" required /></label>
-      <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Uploading…" : "Upload"}</button>
-      </div>
-    </form>
-  `;
-}
-
-function renderModalGroupOptions(classId) {
-  const select = document.getElementById("material-group-select");
-  if (!select) return;
-  const options = groupsInClass(classId)
-    .map((group) => `<option value="${group.id}">${group.name}</option>`)
-    .join("");
-  select.innerHTML = `<option value="">Whole class</option>${options}`;
 }
 
 function addAssignmentModal() {
-  const availableClasses = classesForViewer();
-  if (availableClasses.length === 0) {
+  const availableGroups = groupsForViewer();
+  if (availableGroups.length === 0) {
     return emptyDependencyNotice(
-      "New assignment",
-      "You need at least one class before you can create an assignment for it — create a class first.",
-      "Add a class",
-      "addClass",
+      t("assignments.needGroupTitle"),
+      t("assignments.needGroupBody"),
+      t("assignments.addGroupCta"),
+      "addGroup",
     );
   }
-  const classOptions = availableClasses
-    .map((item) => `<option value="${item.id}">${item.name}</option>`)
+  const groupOptions = availableGroups
+    .map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`)
     .join("");
   return `
-    <h2>New assignment</h2>
+    <h2>${t("assignments.new")}</h2>
     ${modalMessages()}
     <form onsubmit="handleAddAssignment(event)">
-      <label>Title<input type="text" name="title" required /></label>
-      <label>Course / topic<input type="text" name="course" required /></label>
-      <label>Class<select name="classId" required onchange="renderAssignmentGroupOptions(this.value)"><option value="">Choose...</option>${classOptions}</select></label>
-      <label>Share with (optional)<select name="groupId" id="assignment-group-select"><option value="">Whole class</option></select></label>
-      <label>Due date<input type="date" name="dueDate" /></label>
-      <label>Max grade<input type="number" name="maxGrade" value="100" min="1" /></label>
-      <label>Difficulty
+      <label>${t("assignments.form.title")}<input type="text" name="title" required /></label>
+      <label>${t("assignments.form.course")}<input type="text" name="course" required /></label>
+      <label>${t("assignments.form.group")}<select name="groupId" required><option value="">${t("assignments.form.group.choose")}</option>${groupOptions}</select></label>
+      <label>${t("assignments.form.due")}<input type="date" name="dueDate" /></label>
+      <label>${t("assignments.form.maxGrade")}<input type="number" name="maxGrade" value="100" min="1" /></label>
+      <label>${t("assignments.form.difficulty")}
         <select name="difficulty">
-          <option value="Beginner">Beginner</option>
-          <option value="Intermediate">Intermediate</option>
-          <option value="Advanced">Advanced</option>
+          <option value="Beginner">${t("assignments.form.difficulty.beginner")}</option>
+          <option value="Intermediate">${t("assignments.form.difficulty.intermediate")}</option>
+          <option value="Advanced">${t("assignments.form.difficulty.advanced")}</option>
         </select>
       </label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Create assignment"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("assignments.form.create")}</button>
       </div>
     </form>
   `;
 }
 
-function renderAssignmentGroupOptions(classId) {
-  const select = document.getElementById("assignment-group-select");
-  if (!select) return;
-  const options = groupsInClass(classId)
-    .map((group) => `<option value="${group.id}">${group.name}</option>`)
-    .join("");
-  select.innerHTML = `<option value="">Whole class</option>${options}`;
-}
-
-function addAttendanceModal() {
-  const availableClasses = classesForViewer();
-  if (availableClasses.length === 0) {
-    return emptyDependencyNotice(
-      "Take attendance",
-      "You need at least one class before you can take attendance for it — create a class first.",
-      "Add a class",
-      "addClass",
-    );
-  }
-  const defaultClassId = availableClasses[0].id;
+// Opened from a group's own page — that group's own Instructor (or a
+// Manager) takes attendance for its own roster, per session. No class or
+// group picker: this modal is always already scoped to one group (see
+// security.js's canManageGroup(), which is what shows/hides the "Take
+// attendance" button on groupDetailView() in the first place).
+function addAttendanceModal(modal) {
+  const group = groups.find((g) => g.id === modal.groupId);
   const today = new Date().toISOString().slice(0, 10);
-  const classOptions = availableClasses.map((item) => `<option value="${item.id}">${item.name}</option>`).join("");
   return `
-    <h2>Take attendance</h2>
+    <h2>${t("attendance.take")} — ${escapeHtml(group?.name || "")}</h2>
     ${modalMessages()}
-    <form onsubmit="handleTakeAttendance(event)">
-      <label>Class
-        <select name="classId" id="attendance-class-select" onchange="renderAttendanceRoster(this.value, document.getElementById('attendance-date-input').value)">
-          ${classOptions}
-        </select>
+    <form onsubmit="handleTakeAttendance(event, '${escapeJs(modal.groupId)}')">
+      <label>${t("attendance.table.date")}
+        <input type="date" name="date" id="attendance-date-input" value="${today}" onchange="renderAttendanceRoster('${escapeJs(modal.groupId)}', this.value)" />
       </label>
-      <label>Date
-        <input type="date" name="date" id="attendance-date-input" value="${today}" onchange="renderAttendanceRoster(document.getElementById('attendance-class-select').value, this.value)" />
-      </label>
-      <div id="attendance-roster">${attendanceRosterRows(defaultClassId, today)}</div>
+      <div id="attendance-roster">${attendanceRosterRows(modal.groupId, today)}</div>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Saving…" : "Save attendance"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("settings.save")}</button>
       </div>
     </form>
   `;
 }
 
-// Re-rendered whenever the class or date changes: pre-fills each
-// student's status from any attendance already saved for that exact
-// class/date, so reopening the same day shows what was marked instead of
-// resetting everyone back to "Present".
-function attendanceRosterRows(classId, date) {
-  const roster = studentsInClass(classId);
-  if (!roster.length) return `<p class="hint">No students in this class yet.</p>`;
+// Re-rendered whenever the date changes: pre-fills each student's status
+// from any attendance already saved for that exact group/date, so
+// reopening the same day shows what was marked instead of resetting
+// everyone back to "Present".
+function attendanceRosterRows(groupId, date) {
+  const roster = studentsInGroup(groupId);
+  if (!roster.length) return `<p class="hint">${t("attendance.noRoster")}</p>`;
   const existing = new Map(
-    attendanceRecords.filter((record) => record.classId === classId && record.date === date).map((record) => [record.studentId, record.status]),
+    attendanceRecords.filter((record) => record.groupId === groupId && record.date === date).map((record) => [record.studentId, record.status]),
   );
   return `
     <fieldset class="modal-checklist">
-      <legend>Mark each student</legend>
+      <legend>${t("attendance.markEach")}</legend>
       ${roster
         .map((student) => {
           const current = existing.get(student.id) || "present";
           return `
             <div class="attendance-row">
-              <span>${fullName(student)}</span>
+              <span>${escapeHtml(fullName(student))}</span>
               <select name="status-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}">
-                <option value="present" ${current === "present" ? "selected" : ""}>Present</option>
-                <option value="absent" ${current === "absent" ? "selected" : ""}>Absent</option>
-                <option value="late" ${current === "late" ? "selected" : ""}>Late</option>
-                <option value="excused" ${current === "excused" ? "selected" : ""}>Excused</option>
+                <option value="present" ${current === "present" ? "selected" : ""}>${t("attendance.status.present")}</option>
+                <option value="absent" ${current === "absent" ? "selected" : ""}>${t("attendance.status.absent")}</option>
+                <option value="late" ${current === "late" ? "selected" : ""}>${t("attendance.status.late")}</option>
+                <option value="excused" ${current === "excused" ? "selected" : ""}>${t("attendance.status.excused")}</option>
               </select>
             </div>
           `;
@@ -2027,25 +1914,24 @@ function attendanceRosterRows(classId, date) {
   `;
 }
 
-function renderAttendanceRoster(classId, date) {
+function renderAttendanceRoster(groupId, date) {
   const container = document.getElementById("attendance-roster");
   if (!container) return;
-  container.innerHTML = attendanceRosterRows(classId, date);
+  container.innerHTML = attendanceRosterRows(groupId, date);
 }
 
-async function handleTakeAttendance(event) {
+async function handleTakeAttendance(event, groupId) {
   event.preventDefault();
   const form = event.target;
-  const classId = form.classId.value;
   const date = form.date.value;
   const selects = [...form.querySelectorAll("select[data-student-id]")];
-  if (!classId || !date) {
-    state.modalError = "Please choose a class and a date.";
+  if (!date) {
+    state.modalError = t("attendance.needDate");
     render();
     return;
   }
   if (!selects.length) {
-    state.modalError = "There are no students in this class to mark yet.";
+    state.modalError = t("attendance.needStudents");
     render();
     return;
   }
@@ -2055,55 +1941,54 @@ async function handleTakeAttendance(event) {
   try {
     const rows = selects.map((select) => ({
       student_id: select.dataset.studentId,
-      class_id: classId,
+      group_id: groupId,
       session_date: date,
       status: select.value,
     }));
-    await supabaseUpsert("attendance_records", rows, "student_id,class_id,session_date");
+    await supabaseUpsert("attendance_records", rows, "student_id,group_id,session_date");
     await refreshAfterWrite();
     closeModal();
-    navigate("attendance");
+    openGroupDetail(groupId);
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not save attendance. Please try again in a moment.";
+    state.modalError = error.message || t("attendance.form.saveError");
     render();
   }
 }
-
 function addStaffRequestModal() {
   const ownStudents = filterStudentsForViewer(currentViewer(), people.students);
   const studentOptions = ownStudents
-    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(fullName(s))} · ${escapeHtml(className(s.classId))}</option>`)
+    .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(fullName(s))} · ${escapeHtml(groupName(s.groupId))}</option>`)
     .join("");
   return `
-    <h2>New request to Managers</h2>
-    <p class="hint">Send a quick message, request time off, or ask a Manager to remove a student from one of your own classes — a Manager decides every request from their Requests panel.</p>
+    <h2>${t("requests.new.toManagers")}</h2>
+    <p class="hint">${t("requests.new.body")}</p>
     ${modalMessages()}
     <form onsubmit="handleAddStaffRequest(event)">
-      <label>Type
+      <label>${t("requests.type")}
         <select name="kind" onchange="toggleStaffRequestFields(this.value)">
-          <option value="message">Message</option>
-          <option value="holiday">Time off request</option>
-          <option value="removal">Student removal</option>
+          <option value="message">${t("requests.type.message")}</option>
+          <option value="holiday">${t("requests.type.holiday")}</option>
+          <option value="removal">${t("requests.type.removal")}</option>
         </select>
       </label>
       <div id="staff-request-student" hidden>
-        <label>Student
+        <label>${t("requests.student")}
           <select name="studentRef">
-            <option value="">Select a student…</option>
+            <option value="">${t("requests.student.choose")}</option>
             ${studentOptions}
           </select>
         </label>
-        ${ownStudents.length === 0 ? `<p class="hint">You don't have any students in your own classes yet.</p>` : ""}
+        ${ownStudents.length === 0 ? `<p class="hint">${t("requests.noOwnStudents")}</p>` : ""}
       </div>
-      <label>Subject<input type="text" name="subject" required /></label>
-      <label>Details<textarea name="message" rows="3"></textarea></label>
+      <label>${t("requests.subject")}<input type="text" name="subject" required /></label>
+      <label>${t("requests.details")}<textarea name="message" rows="3"></textarea></label>
       <div id="staff-request-dates" hidden>
-        <label>Start date<input type="date" name="startDate" /></label>
-        <label>End date<input type="date" name="endDate" /></label>
+        <label>${t("requests.startDate")}<input type="date" name="startDate" /></label>
+        <label>${t("requests.endDate")}<input type="date" name="endDate" /></label>
       </div>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Sending…" : "Send"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.sending") : t("requests.send")}</button>
       </div>
     </form>
   `;
@@ -2127,12 +2012,12 @@ async function handleAddStaffRequest(event) {
   const studentRef = form.studentRef ? form.studentRef.value : "";
   const instructorName = state.viewerContext?.instructorName;
   if (!subject) {
-    state.modalError = "Please add a subject.";
+    state.modalError = t("requests.needSubject");
     render();
     return;
   }
   if (!instructorName) {
-    state.modalError = "Your account isn't linked to an instructor record yet. Ask a Manager to fix this.";
+    state.modalError = t("requests.needInstructorLink");
     render();
     return;
   }
@@ -2140,13 +2025,13 @@ async function handleAddStaffRequest(event) {
   let targetStudentName = null;
   if (kind === "removal") {
     if (!studentRef) {
-      state.modalError = "Choose which student you're requesting to remove.";
+      state.modalError = t("requests.chooseStudent");
       render();
       return;
     }
     const targetStudent = filterStudentsForViewer(currentViewer(), people.students).find((s) => s.id === studentRef);
     if (!targetStudent) {
-      state.modalError = "That student isn't in one of your own classes.";
+      state.modalError = t("requests.studentNotYours");
       render();
       return;
     }
@@ -2174,7 +2059,7 @@ async function handleAddStaffRequest(event) {
     navigate("staffRequests");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not send this. Please try again in a moment.";
+    state.modalError = error.message || t("requests.form.saveError");
     render();
   }
 }
@@ -2184,16 +2069,16 @@ function staffRequestsView() {
   const rows = isManager ? staffRequests : staffRequests.filter((r) => r.instructorName === state.viewerContext?.instructorName);
 
   return `
-    ${state.staffRequestNotice ? `<p class="notice-row ${state.staffRequestNotice.type === "error" ? "auth-error" : "m-success"}">${escapeHtml(state.staffRequestNotice.message)}<button type="button" class="notice-dismiss" onclick="dismissStaffRequestNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
-    <div class="toolbar">${!isManager ? `<button onclick="openModal('addStaffRequest')">New request</button>` : ""}</div>
+    ${state.staffRequestNotice ? `<p class="notice-row ${state.staffRequestNotice.type === "error" ? "auth-error" : "m-success"}">${escapeHtml(state.staffRequestNotice.message)}<button type="button" class="notice-dismiss" onclick="dismissStaffRequestNotice()" aria-label="${t("common.dismiss")}">&times;</button></p>` : ""}
+    <div class="toolbar">${!isManager ? `<button onclick="openModal('addStaffRequest')">${t("requests.new")}</button>` : ""}</div>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>${isManager ? "Staff Requests" : "Your Requests"}</h2><span>${rows.length} total</span></div>
+      <div class="panel-head"><h2>${isManager ? t("requests.title") : t("requests.titleMine")}</h2><span>${assignments.length >= 0 ? rows.length : rows.length} ${t("common.total").toLowerCase()}</span></div>
       <table>
-        <thead><tr>${isManager ? "<th>From</th>" : ""}<th>Type</th><th>Subject</th><th>Details</th><th>Status</th>${isManager ? "<th>Action</th>" : ""}</tr></thead>
+        <thead><tr>${isManager ? `<th>${t("requests.from")}</th>` : ""}<th>${t("requests.type")}</th><th>${t("requests.subject")}</th><th>${t("requests.details")}</th><th>${t("common.status")}</th>${isManager ? `<th>${t("common.action")}</th>` : ""}</tr></thead>
         <tbody>
           ${
             rows.map((r) => staffRequestRow(r, isManager)).join("") ||
-            `<tr><td colspan="${isManager ? 6 : 4}" class="empty">${isManager ? "No requests yet." : "You haven't sent any requests yet."}</td></tr>`
+            `<tr><td colspan="${isManager ? 6 : 4}" class="empty">${isManager ? t("requests.noneYet") : t("requests.noneSent")}</td></tr>`
           }
         </tbody>
       </table>
@@ -2205,26 +2090,27 @@ function staffRequestRow(request, isManager) {
   const busy = state.staffRequestBusy === request.id;
   const isRemoval = request.kind === "removal";
   const details = isRemoval
-    ? `Remove ${escapeHtml(request.targetStudentName || request.targetStudentId || "student")}${request.message ? ` · ${escapeHtml(request.message)}` : ""}`
+    ? `${t("requests.type.removal")}: ${escapeHtml(request.targetStudentName || request.targetStudentId || "")}${request.message ? ` · ${escapeHtml(request.message)}` : ""}`
     : request.kind === "holiday"
       ? `${request.startDate || "?"} → ${request.endDate || "?"}${request.message ? ` · ${escapeHtml(request.message)}` : ""}`
       : escapeHtml(request.message) || "—";
-  const kindLabel = isRemoval ? "Student removal" : request.kind === "holiday" ? "Time off" : "Message";
+  const kindLabel = isRemoval ? t("requests.kind.removal") : request.kind === "holiday" ? t("requests.kind.holiday") : t("requests.kind.message");
   const approveHandler = isRemoval ? `approveRemovalRequest('${request.id}')` : `setStaffRequestStatus('${request.id}', 'approved')`;
-  const approveLabel = busy ? "Working…" : isRemoval ? "Approve & remove" : "Approve";
+  const approveLabel = busy ? t("common.working") : isRemoval ? t("requests.approveAndRemove") : t("common.approve");
+  const statusLabel = request.status.charAt(0).toUpperCase() + request.status.slice(1);
   return `
     <tr>
       ${isManager ? `<td>${escapeHtml(request.instructorName)}</td>` : ""}
       <td>${badge(kindLabel)}</td>
       <td><strong>${escapeHtml(request.subject)}</strong></td>
       <td>${details}</td>
-      <td>${badge(request.status.charAt(0).toUpperCase() + request.status.slice(1))}</td>
+      <td>${badge(statusLabel)}</td>
       ${
         isManager
           ? `<td>
               <button onclick="${approveHandler}" ${busy ? "disabled" : ""}>${approveLabel}</button>
-              <button onclick="setStaffRequestStatus('${request.id}', 'denied')" ${busy ? "disabled" : ""}>Deny</button>
-              <button onclick="setStaffRequestStatus('${request.id}', 'read')" ${busy ? "disabled" : ""}>Mark read</button>
+              <button onclick="setStaffRequestStatus('${request.id}', 'denied')" ${busy ? "disabled" : ""}>${t("common.deny")}</button>
+              <button onclick="setStaffRequestStatus('${request.id}', 'read')" ${busy ? "disabled" : ""}>${t("common.markRead")}</button>
             </td>`
           : ""
       }
@@ -2270,17 +2156,17 @@ async function approveRemovalRequest(id) {
 
 async function handleApproveRemovalRequest(request) {
   if (!state.session) return;
-  const label = request.targetStudentName || request.targetStudentId || "this student";
-  if (!window.confirm(`Remove ${label}? This deletes their student record and login. This can't be undone.`)) return;
+  const label = request.targetStudentName || request.targetStudentId || "";
+  if (!window.confirm(t("requests.confirmRemove", { name: label }))) return;
   state.staffRequestBusy = request.id;
   state.staffRequestNotice = null;
   renderContentOnly();
   try {
     await removeAccountApi({ role: "Student", ref: request.targetStudentId });
     await setStaffRequestStatus(request.id, "approved");
-    state.staffRequestNotice = { type: "success", message: `${label} was removed.` };
+    state.staffRequestNotice = { type: "success", message: t("requests.removedNotice", { name: label }) };
   } catch (error) {
-    state.staffRequestNotice = { type: "error", message: error.message || "Could not remove this student." };
+    state.staffRequestNotice = { type: "error", message: error.message || t("students.removeError") };
   } finally {
     state.staffRequestBusy = null;
     renderContentOnly();
@@ -2297,10 +2183,19 @@ function escapeHtml(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
+// A "back" arrow points the way the reader's eye actually goes back —
+// left in English/Italian, right in Arabic — so it's derived from the
+// current language rather than hardcoded, unlike a plain "&larr;" would
+// be. Used on every "&larr; Back to ..." button across the auth screens
+// and the group detail page.
+function backArrow() {
+  return isRtl(state.lang) ? "→" : "←";
+}
+
 // Several "Add ..." forms depend on another kind of record existing first
-// (a class needs an instructor to assign; a student/material/assignment
-// needs a class to belong to). On a brand-new school with nothing created
-// yet, showing a required dropdown with zero options is a dead end — this
+// (a group needs an instructor to assign; a student/assignment needs a
+// group to belong to). On a brand-new school with nothing created yet,
+// showing a required dropdown with zero options is a dead end — this
 // renders a clear next step instead of a form that can never be submitted.
 function emptyDependencyNotice(title, message, buttonLabel, nextModal) {
   return `
@@ -2312,7 +2207,7 @@ function emptyDependencyNotice(title, message, buttonLabel, nextModal) {
   `;
 }
 
-async function handleAddClass(event) {
+async function handleAddGroup(event) {
   event.preventDefault();
   const form = event.target;
   const name = form.name.value.trim();
@@ -2321,7 +2216,7 @@ async function handleAddClass(event) {
   const schedule = form.schedule.value.trim();
   const room = form.room.value.trim();
   if (!name || !course || !instructor) {
-    state.modalError = "Please fill in the class name, course, and instructor.";
+    state.modalError = t("groups.form.missingFields");
     render();
     return;
   }
@@ -2329,14 +2224,13 @@ async function handleAddClass(event) {
   state.modalError = "";
   render();
   try {
-    const classId = nextRefId("CLS", classes.map((item) => item.id));
-    await supabaseInsert("classes", [
+    const groupId = nextRefId("GRP", groups.map((item) => item.id));
+    await supabaseInsert("groups", [
       {
-        class_id: classId,
+        group_id: groupId,
         name,
         course,
         instructor,
-        student_count: 0,
         schedule: schedule || null,
         room: room || null,
         status: "Active",
@@ -2345,10 +2239,10 @@ async function handleAddClass(event) {
     ]);
     await refreshAfterWrite();
     closeModal();
-    navigate("classes");
+    navigate("groups");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not create the class.";
+    state.modalError = error.message || t("groups.form.saveError");
     render();
   }
 }
@@ -2360,7 +2254,7 @@ async function handleAddInstructor(event) {
   const email = form.email.value.trim().toLowerCase();
   const issueLogin = form.issueLogin.checked;
   if (!name || !email) {
-    state.modalError = "Please add a name and email.";
+    state.modalError = t("instructors.form.missingFields");
     render();
     return;
   }
@@ -2369,10 +2263,10 @@ async function handleAddInstructor(event) {
   render();
   try {
     await supabaseInsert("instructors", [{ name, email, classes: [], status: "Active" }]);
-    let notice = `${name} was added as an instructor.`;
+    let notice = t("instructors.addedNotice", { name });
     if (issueLogin) {
       const result = await callAccountApi({ role: "Instructor", email, fullName: name, instructorRef: name });
-      notice += ` Username: ${result.email} · Temporary password: ${result.password}`;
+      notice += t("credentials.suffix", { email: result.email, password: result.password });
     }
     await refreshAfterWrite();
     state.modalBusy = false;
@@ -2381,7 +2275,7 @@ async function handleAddInstructor(event) {
     render();
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not add the instructor.";
+    state.modalError = error.message || t("instructors.form.saveError");
     render();
   }
 }
@@ -2392,10 +2286,10 @@ async function handleAddStudent(event) {
   const firstName = form.firstName.value.trim();
   const lastName = form.lastName.value.trim();
   const email = form.email.value.trim().toLowerCase();
-  const classId = form.classId.value;
+  const groupId = form.groupId.value;
   const issueLogin = form.issueLogin.checked;
-  if (!firstName || !lastName || !email || !classId) {
-    state.modalError = "Please fill in every field and choose a class.";
+  if (!firstName || !lastName || !email || !groupId) {
+    state.modalError = t("students.form.missingFields");
     render();
     return;
   }
@@ -2411,7 +2305,7 @@ async function handleAddStudent(event) {
         last_name: lastName,
         email,
         status: "Active",
-        class_id: classId,
+        group_id: groupId,
         progress: 0,
         attendance: 0,
         avg_grade: 0,
@@ -2419,10 +2313,10 @@ async function handleAddStudent(event) {
         late: 0,
       },
     ]);
-    let notice = `${firstName} ${lastName} was added.`;
+    let notice = t("students.addedNotice", { name: `${firstName} ${lastName}` });
     if (issueLogin) {
       const result = await callAccountApi({ role: "Student", email, fullName: `${firstName} ${lastName}`, studentRef: studentId });
-      notice += ` Username: ${result.email} · Temporary password: ${result.password}`;
+      notice += t("credentials.suffix", { email: result.email, password: result.password });
     }
     await refreshAfterWrite();
     state.modalBusy = false;
@@ -2431,7 +2325,7 @@ async function handleAddStudent(event) {
     render();
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not add the student.";
+    state.modalError = error.message || t("students.form.saveError");
     render();
   }
 }
@@ -2442,7 +2336,7 @@ async function handleAddManager(event) {
   const name = form.name.value.trim();
   const email = form.email.value.trim().toLowerCase();
   if (!name || !email) {
-    state.modalError = "Please add a name and email.";
+    state.modalError = t("managers.form.missingFields");
     render();
     return;
   }
@@ -2453,11 +2347,11 @@ async function handleAddManager(event) {
     const result = await callAccountApi({ role: "Manager", email, fullName: name });
     state.modalBusy = false;
     state.modalError = "";
-    state.modalNotice = `${name} can now sign in as a Manager. Username: ${result.email} · Temporary password: ${result.password}`;
+    state.modalNotice = t("managers.addedNotice", { name }) + t("credentials.suffix", { email: result.email, password: result.password });
     render();
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not add the manager.";
+    state.modalError = error.message || t("managers.form.saveError");
     render();
   }
 }
@@ -2479,17 +2373,17 @@ async function handleSaveSettings(event) {
   const careersEmail = form.careersEmail.value.trim();
 
   if (!name) {
-    state.settingsError = "School name can't be empty.";
+    state.settingsError = t("settings.error.nameRequired");
     render();
     return;
   }
   if (!Number.isFinite(absenceThreshold) || absenceThreshold < 1) {
-    state.settingsError = "Absence threshold must be a number of 1 or more.";
+    state.settingsError = t("settings.error.thresholdInvalid");
     render();
     return;
   }
   if (careersEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(careersEmail)) {
-    state.settingsError = "Careers email doesn't look like a valid email address.";
+    state.settingsError = t("settings.error.careersEmailInvalid");
     render();
     return;
   }
@@ -2514,65 +2408,28 @@ async function handleSaveSettings(event) {
     });
     const body = await response.json().catch(() => []);
     if (!response.ok) {
-      throw new Error(body?.message || body?.hint || "Could not save settings.");
+      throw new Error(body?.message || body?.hint || t("errors.generic"));
     }
     if (Array.isArray(body) && body.length === 0) {
       throw new Error("No school settings row was updated — is more than one row present, or none at all?");
     }
     school = { ...school, name, portalUrl, settings: nextSettings };
-    state.settingsNotice = "Settings saved.";
+    state.settingsNotice = t("settings.saved");
   } catch (error) {
-    state.settingsError = error.message || "Could not save settings.";
+    state.settingsError = error.message || t("errors.generic");
   } finally {
     state.settingsBusy = false;
     render();
   }
 }
 
-async function handleAddGroup(event, classId) {
-  event.preventDefault();
-  const form = event.target;
-  const name = form.name.value.trim();
-  const memberIds = [...form.querySelectorAll("input[name='members']:checked")].map((input) => input.value);
-  if (!name) {
-    state.modalError = "Please name the group.";
-    render();
-    return;
-  }
-  state.modalBusy = true;
-  state.modalError = "";
-  render();
-  try {
-    const groupId = nextRefId("GRP", groups.map((group) => group.id));
-    await supabaseInsert("groups", [{ group_id: groupId, name, class_id: classId }]);
-    if (memberIds.length) {
-      await supabaseInsert(
-        "group_members",
-        memberIds.map((studentId) => ({ group_id: groupId, student_id: studentId })),
-      );
-    }
-    await refreshAfterWrite();
-    state.modalBusy = false;
-    state.modalError = "";
-    state.modalNotice = `"${name}" was created.`;
-    state.modal = { type: "addGroup", classId };
-    render();
-  } catch (error) {
-    state.modalBusy = false;
-    state.modalError = error.message || "Could not create the group.";
-    render();
-  }
-}
-
-async function handleAddMaterial(event) {
+async function handleAddMaterial(event, groupId) {
   event.preventDefault();
   const form = event.target;
   const title = form.title.value.trim();
-  const classId = form.classId.value;
-  const groupId = form.groupId.value || null;
   const file = form.file.files[0];
-  if (!title || !classId || !file) {
-    state.modalError = "Please fill in the title, class, and choose a file.";
+  if (!title || !file) {
+    state.modalError = t("materials.form.missingFields");
     render();
     return;
   }
@@ -2581,12 +2438,11 @@ async function handleAddMaterial(event) {
   render();
   try {
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
-    const path = `${classId}/${Date.now()}-${safeName}`;
+    const path = `${groupId}/${Date.now()}-${safeName}`;
     await supabaseUploadFile(path, file);
     await supabaseInsert("materials", [
       {
         title,
-        class_id: classId,
         group_id: groupId,
         file_path: path,
         file_name: file.name,
@@ -2595,10 +2451,10 @@ async function handleAddMaterial(event) {
     ]);
     await refreshAfterWrite();
     closeModal();
-    navigate("materials");
+    openGroupDetail(groupId);
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not upload the material.";
+    state.modalError = error.message || t("materials.form.saveError");
     render();
   }
 }
@@ -2608,14 +2464,13 @@ async function handleAddAssignment(event) {
   const form = event.target;
   const title = form.title.value.trim();
   const course = form.course.value.trim();
-  const classId = form.classId.value;
-  const groupId = form.groupId.value || null;
+  const groupId = form.groupId.value;
   const dueDate = form.dueDate.value || null;
   const maxGrade = Number(form.maxGrade.value) || 100;
   const difficulty = form.difficulty.value;
-  const cls = classes.find((item) => item.id === classId);
-  if (!title || !course || !cls) {
-    state.modalError = "Please fill in the title, course, and choose a class.";
+  const group = groups.find((item) => item.id === groupId);
+  if (!title || !course || !group) {
+    state.modalError = t("assignments.form.missingFields");
     render();
     return;
   }
@@ -2623,12 +2478,11 @@ async function handleAddAssignment(event) {
   state.modalError = "";
   render();
   try {
-    const total = groupId ? groupMembers.filter((m) => m.groupId === groupId).length : studentsInClass(classId).length;
+    const total = studentsInGroup(groupId).length;
     await supabaseInsert("assignments", [
       {
         title,
         course,
-        class_name: cls.name,
         group_id: groupId,
         due_date: dueDate,
         status: "Assigned",
@@ -2643,42 +2497,10 @@ async function handleAddAssignment(event) {
     navigate("assignments");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not create the assignment.";
+    state.modalError = error.message || t("assignments.form.saveError");
     render();
   }
 }
-
-function materialsView() {
-  // `materials` is already scoped by the "materials scoped read" RLS
-  // policy (0006 migration) at fetch time in loadFromSupabase — a
-  // Student/Parent only ever receives rows for their own class/group, an
-  // Instructor only their own classes, so no extra client-side filtering
-  // is needed here.
-  const canUpload = ["Super Admin", "School Admin", "Instructor"].includes(state.role);
-  const rows = materials;
-
-  return `
-    ${canUpload ? `<div class="toolbar"><button onclick="openModal('addMaterial')">Upload material</button></div>` : ""}
-    <section class="panel table-panel">
-      <div class="panel-head"><h2>Shared Materials</h2><span>${rows.length} files</span></div>
-      <table>
-        <thead><tr><th>Title</th><th>Class</th><th>Shared with</th><th>Uploaded</th><th>Action</th></tr></thead>
-        <tbody>
-          ${
-            rows
-              .map((item) => {
-                const cls = classes.find((c) => c.id === item.classId);
-                const group = groups.find((g) => g.id === item.groupId);
-                return `<tr><td><strong>${item.title}</strong><span>${item.fileName}</span></td><td>${cls ? cls.name : item.classId}</td><td>${group ? group.name : "Whole class"}</td><td>${item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "—"}</td><td><button onclick="supabaseDownloadFile('${escapeJs(item.filePath)}', '${escapeJs(item.fileName)}')">Download</button></td></tr>`;
-              })
-              .join("") || `<tr><td colspan="5" class="empty">No materials shared yet.</td></tr>`
-          }
-        </tbody>
-      </table>
-    </section>
-  `;
-}
-
 function appShell() {
   if (state.authMode === "checking") return authLoadingScreen();
   if (state.authMode === "marketing") return state.opportunityDetail ? opportunityDetailScreen(state.opportunityDetail) : marketingScreen();
@@ -2692,8 +2514,8 @@ function authLoadingScreen() {
   return `
     <div class="auth-screen">
       <div class="auth-card">
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-        <p>Loading ${school.name} portal…</p>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
+        <p>${t("app.loading", { school: escapeHtml(school.name) })}</p>
       </div>
     </div>
   `;
@@ -2704,48 +2526,53 @@ function loginScreen() {
   const isStudent = state.loginMode === "student";
   return `
     <div class="auth-screen auth-screen-${state.loginMode}">
-      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
+      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
+      ${langSwitcherHtml("auth-lang", "auth-lang-switcher")}
       <form class="auth-card" onsubmit="handleLoginSubmit(event)">
-        <button type="button" class="auth-back" onclick="backToLoginChooser()">&larr; Back</button>
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-        <span class="auth-audience-tag">${isStudent ? "Student & Family Portal" : "Staff Portal"}</span>
-        <h1>${school.name}</h1>
-        <p class="eyebrow">${isStudent ? "Sign in to see your classes, grades, and chat" : "Sign in to manage your school"}</p>
-        ${state.authError ? `<p class="auth-error">${state.authError}</p>` : ""}
-        <label>Username (email)<input type="email" name="email" autocomplete="username" required autofocus /></label>
-        <label>Password<input type="password" name="password" autocomplete="current-password" required /></label>
-        <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? "Signing in…" : "Sign in"}</button>
-        <small>Lost your credentials? Ask your ${isStudent ? "instructor or school" : "manager or instructor"} to issue or reset them${isStudent ? "" : " from Accounts &amp; Logins"}.</small>
+        <button type="button" class="auth-back" onclick="backToLoginChooser()">${backArrow()} ${t("common.back")}</button>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
+        <span class="auth-audience-tag">${isStudent ? t("auth.audience.student") : t("auth.audience.staff")}</span>
+        <h1>${escapeHtml(school.name)}</h1>
+        <p class="eyebrow">${isStudent ? t("auth.sub.student") : t("auth.sub.staff")}</p>
+        ${state.authError ? `<p class="auth-error">${escapeHtml(state.authError)}</p>` : ""}
+        <label>${t("auth.username")}<input type="email" name="email" autocomplete="username" required autofocus /></label>
+        <label>${t("auth.password")}<input type="password" name="password" autocomplete="current-password" required /></label>
+        <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? t("common.signingIn") : t("common.signIn")}</button>
+        <small>${t("auth.lostCreds", {
+          who: isStudent ? t("auth.lostCreds.student") : t("auth.lostCreds.staff"),
+          where: isStudent ? "" : t("auth.lostCreds.whereStaff"),
+        })}</small>
       </form>
     </div>
   `;
 }
 
-// Two audiences, two tiles — a Student/Parent never has to look at a form
-// meant for staff (and vice versa) before choosing who they are. Signing
-// in itself is unchanged underneath: the same email + password submit
-// either way, and the account's real role (decided by user_profiles /
-// RLS) is what actually determines what they can see next — this is only
-// which welcome screen and copy they see on the way in.
+// Two audiences, two tiles — a Student never has to look at a form meant
+// for staff (and vice versa) before choosing who they are. Signing in
+// itself is unchanged underneath: the same email + password submit either
+// way, and the account's real role (decided by user_profiles / RLS) is
+// what actually determines what they can see next — this is only which
+// welcome screen and copy they see on the way in.
 function loginChooserScreen() {
   return `
     <div class="auth-screen auth-chooser">
-      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
+      <button type="button" class="theme-toggle auth-theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
+      ${langSwitcherHtml("auth-lang", "auth-lang-switcher")}
       <div class="auth-chooser-card">
-        <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-        <h1>${school.name}</h1>
-        <p class="eyebrow">Who's signing in?</p>
+        <button type="button" class="auth-back" onclick="backToMarketing()">${backArrow()} ${t("common.backToHomepage")}</button>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
+        <h1>${escapeHtml(school.name)}</h1>
+        <p class="eyebrow">${t("auth.chooser.title")}</p>
         <div class="auth-chooser-grid">
           <button type="button" class="auth-chooser-tile auth-chooser-student" onclick="chooseLoginMode('student')">
             <span class="auth-chooser-icon" aria-hidden="true">🎓</span>
-            <strong>Student &amp; Family</strong>
-            <span>Students and parents — see classes, grades, chat, and more</span>
+            <strong>${t("auth.chooser.student.title")}</strong>
+            <span>${t("auth.chooser.student.desc")}</span>
           </button>
           <button type="button" class="auth-chooser-tile auth-chooser-staff" onclick="chooseLoginMode('staff')">
             <span class="auth-chooser-icon" aria-hidden="true">🏫</span>
-            <strong>Staff</strong>
-            <span>Instructors and managers — run classes and school operations</span>
+            <strong>${t("auth.chooser.staff.title")}</strong>
+            <span>${t("auth.chooser.staff.desc")}</span>
           </button>
         </div>
       </div>
@@ -2757,11 +2584,11 @@ function notConfiguredScreen() {
   return `
     <div class="auth-screen">
       <div class="auth-card">
-        <button type="button" class="auth-back" onclick="backToMarketing()">&larr; Back to homepage</button>
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-        <h1>Almost there</h1>
-        <p class="eyebrow">This portal isn't finished setting up yet</p>
-        <p>${school.name}'s portal hasn't been fully set up yet, so there's no sign-in to show. If you're setting this school up, see <code>docs/deploy-vercel-supabase.md</code> for the setup steps — once that's done, this button will take visitors to a real sign-in screen.</p>
+        <button type="button" class="auth-back" onclick="backToMarketing()">${backArrow()} ${t("common.backToHomepage")}</button>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
+        <h1>${t("auth.notConfigured.title")}</h1>
+        <p class="eyebrow">${t("auth.notConfigured.eyebrow")}</p>
+        <p>${t("auth.notConfigured.body", { school: escapeHtml(school.name) })}</p>
       </div>
     </div>
   `;
@@ -2771,14 +2598,14 @@ function forcePasswordScreen() {
   return `
     <div class="auth-screen">
       <form class="auth-card" onsubmit="handleForcePasswordSubmit(event)">
-        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
-        <h1>Set a new password</h1>
-        <p class="eyebrow">First login for ${state.profile?.full_name || state.profile?.email || "your account"}</p>
-        ${state.authError ? `<p class="auth-error">${state.authError}</p>` : ""}
-        <label>New password<input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></label>
-        <label>Confirm new password<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></label>
-        <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? "Saving…" : "Save and continue"}</button>
-        <small>Your admin issued a temporary password. Choose a new one only you know.</small>
+        <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
+        <h1>${t("auth.forcePassword.title")}</h1>
+        <p class="eyebrow">${t("auth.forcePassword.eyebrow", { name: escapeHtml(state.profile?.full_name || state.profile?.email || "") })}</p>
+        ${state.authError ? `<p class="auth-error">${escapeHtml(state.authError)}</p>` : ""}
+        <label>${t("auth.forcePassword.new")}<input type="password" name="newPassword" autocomplete="new-password" minlength="8" required /></label>
+        <label>${t("auth.forcePassword.confirm")}<input type="password" name="confirmPassword" autocomplete="new-password" minlength="8" required /></label>
+        <button type="submit" ${state.authBusy ? "disabled" : ""}>${state.authBusy ? t("common.saving") : t("auth.forcePassword.submit")}</button>
+        <small>${t("auth.forcePassword.note")}</small>
       </form>
     </div>
   `;
@@ -2810,45 +2637,40 @@ const sampleReviews = [
   },
 ];
 
+// A gallery of real photos/videos from previous classes — see req: "add a
+// gallery for previous experience". No real assets have been supplied for
+// this school yet, so this list starts empty and the gallery section
+// below shows a friendly "coming soon" placeholder instead of stock or
+// fabricated photos. To add real ones later, drop the files in
+// src/assets/gallery/ and add entries here, e.g.:
+//   { type: "image", src: "/src/assets/gallery/class-1.jpg", alt: "..." }
+//   { type: "video", src: "/src/assets/gallery/demo-day.mp4", poster: "/src/assets/gallery/demo-day-poster.jpg" }
+const galleryItems = [];
+
 const trustStats = [
-  { value: "60+", label: "Students trained so far" },
-  { value: "Ages 6–16", label: "Programs for every age" },
-  { value: "Live", label: "Instructor-led, not pre-recorded" },
+  { valueKey: "marketing.stat.students", labelKey: "marketing.stat.students", isCount: true },
+  { valueKey: "marketing.stat.ages.value", labelKey: "marketing.stat.ages" },
+  { valueKey: "marketing.stat.live.value", labelKey: "marketing.stat.live" },
 ];
 
 const programTracks = [
-  {
-    name: "Junior Coders",
-    age: "Ages 6–9",
-    desc: "Block-based coding with Scratch — kids build their first animations and games while learning logic and sequencing.",
-    skills: ["Scratch", "Logic & sequencing", "First animations & games"],
-  },
-  {
-    name: "Code Builders",
-    age: "Ages 10–13",
-    desc: "Python fundamentals and web basics — real projects kids can show off, from simple apps to their first website.",
-    skills: ["Python basics", "HTML & CSS", "First real projects"],
-  },
-  {
-    name: "Young Developers",
-    age: "Ages 14–17",
-    desc: "Web and app development, plus game-dev fundamentals — building a portfolio ready for the next step.",
-    skills: ["Web & app development", "Game-dev fundamentals", "Portfolio project"],
-  },
+  { key: "junior", skillCount: 3 },
+  { key: "builders", skillCount: 3 },
+  { key: "young", skillCount: 3 },
 ];
 
 const howItWorks = [
-  { step: "1", title: "Book a free trial class", desc: "Send a message or request a call back — we'll find a class time that fits your child's age and schedule." },
-  { step: "2", title: "Quick placement chat", desc: "A short conversation with an instructor makes sure your child starts in the right track for their age and experience." },
-  { step: "3", title: "Start learning, live", desc: "Small live classes with a real instructor — and a parent login so you can follow attendance and progress along the way." },
+  { step: "1", key: "step1" },
+  { step: "2", key: "step2" },
+  { step: "3", key: "step3" },
 ];
 
 const compareRows = [
-  ["Live, instructor-led classes with real-time feedback", "check", "cross", "partial"],
-  ["Small class sizes with personal attention", "check", "cross", "partial"],
-  ["Structured curriculum that builds skills over time", "check", "partial", "cross"],
-  ["Real projects your child can show off and be proud of", "check", "partial", "partial"],
-  ["Parents can track attendance & progress online", "check", "cross", "cross"],
+  ["compare.row1", "check", "cross", "partial"],
+  ["compare.row2", "check", "cross", "partial"],
+  ["compare.row3", "check", "partial", "cross"],
+  ["compare.row4", "check", "partial", "partial"],
+  ["compare.row5", "check", "cross", "cross"],
 ];
 
 function compareIcon(kind) {
@@ -2865,11 +2687,25 @@ const socialIcons = {
 function socialLinksHtml() {
   const wa = (school.social.whatsapp || "").replace(/[^\d]/g, "");
   return `
-    <a class="m-social-link" href="${school.social.facebook}" target="_blank" rel="noopener">${socialIcons.facebook}<span>Facebook</span></a>
+    <a class="m-social-link" href="${escapeHtml(school.social.facebook)}" target="_blank" rel="noopener">${socialIcons.facebook}<span>Facebook</span></a>
     <a class="m-social-link" href="https://wa.me/${wa}" target="_blank" rel="noopener">${socialIcons.whatsapp}<span>WhatsApp</span></a>
   `;
 }
 
+// The language switcher — three flags-free text buttons (ar / it / en) —
+// appears in the marketing nav, the auth screens, and the signed-in
+// topbar, mirroring the existing theme-toggle button's placement pattern.
+// `extraClass` lets a caller position it (see the auth screens above,
+// which float it in a fixed corner rather than inline).
+function langSwitcherHtml(idPrefix, extraClass) {
+  return `
+    <div class="lang-switcher ${extraClass || ""}" role="group" aria-label="${t("common.language")}">
+      ${LANGS.map(
+        (code) => `<button type="button" class="lang-option ${state.lang === code ? "active" : ""}" onclick="setLanguage('${code}')" aria-pressed="${state.lang === code}">${LANG_LABELS[code]}</button>`,
+      ).join("")}
+    </div>
+  `;
+}
 // An opportunity's own page — reached by clicking "View details & apply"
 // on a Work With Us card, or a direct link (see applyOpportunityHash()).
 // Shows the full posting and where to send a CV and cover letter.
@@ -2883,30 +2719,34 @@ function opportunityDetailScreen(op) {
     <div class="marketing">
       <header class="m-nav">
         <div class="brand">
-          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
           <strong>${escapeHtml(school.name)}</strong>
         </div>
         <div class="m-nav-social">${socialLinksHtml()}</div>
-        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
-        <button class="m-login-button" onclick="beginLogin()">Login</button>
+        ${langSwitcherHtml("m-lang")}
+        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
+        <button class="m-login-button" onclick="beginLogin()">${t("footer.login")}</button>
       </header>
 
       <section class="m-section reveal">
-        <button type="button" class="auth-back" onclick="closeOpportunityDetail()">&larr; Back to Work With Us</button>
-        <p class="eyebrow">Open position</p>
+        <button type="button" class="auth-back" onclick="closeOpportunityDetail()">${backArrow()} ${t("marketing.careers.backToList")}</button>
+        <p class="eyebrow">${t("marketing.careers.openPosition")}</p>
         <h1>${escapeHtml(op.title)}</h1>
-        <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || "Details on request"}</p>
+        <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || t("marketing.careers.detailsOnRequest")}</p>
 
         <div class="panel">
-          ${op.description ? `<p>${escapeHtml(op.description)}</p>` : `<p class="empty">No further details posted yet — reach out and ask.</p>`}
+          ${op.description ? `<p>${escapeHtml(op.description)}</p>` : `<p class="empty">${t("marketing.careers.noDetails")}</p>`}
         </div>
 
         <div class="panel">
-          <h2>How to apply</h2>
+          <h2>${t("marketing.careers.howToApply")}</h2>
           ${
             careersEmail
-              ? `<p>Send your CV and a short cover letter to <a href="mailto:${escapeHtml(careersEmail)}?subject=${mailSubject}&body=${mailBody}">${escapeHtml(careersEmail)}</a> — mention "${escapeHtml(op.title)}" in the subject line.</p>`
-              : `<p>We haven't set up an application email yet — use the <a href="#contact" onclick="closeOpportunityDetail()">contact form</a> and mention you're applying for "${escapeHtml(op.title)}".</p>`
+              ? `<p>${t("marketing.careers.emailInstructions", {
+                  email: `<a href="mailto:${escapeHtml(careersEmail)}?subject=${mailSubject}&body=${mailBody}">${escapeHtml(careersEmail)}</a>`,
+                  title: escapeHtml(op.title),
+                })}</p>`
+              : `<p>${t("marketing.careers.noEmail", { title: escapeHtml(op.title), link: `<a href="#contact" onclick="closeOpportunityDetail()">${t("marketing.careers.noEmail.linkText")}</a>` })}</p>`
           }
         </div>
       </section>
@@ -2914,7 +2754,7 @@ function opportunityDetailScreen(op) {
       <footer class="m-footer">
         <span>&copy; ${new Date().getFullYear()} ${escapeHtml(school.name)}</span>
         <div class="m-footer-social">${socialLinksHtml()}</div>
-        <button class="m-login-button" onclick="beginLogin()">Login</button>
+        <button class="m-login-button" onclick="beginLogin()">${t("footer.login")}</button>
       </footer>
     </div>
   `;
@@ -2930,29 +2770,30 @@ function marketingScreen() {
     <div class="marketing">
       ${showPromo ? `
         <div class="promo-overlay" onclick="if (event.target === this) dismissPromoModal()">
-          <div class="promo-modal" role="dialog" aria-modal="true" aria-label="Enroll your child">
-            <button type="button" class="promo-close" onclick="dismissPromoModal()" aria-label="Close">&times;</button>
-            <img src="/src/assets/promo-different-start.jpg" alt="Every child has a different beginning — Hero Tech Academy" />
+          <div class="promo-modal" role="dialog" aria-modal="true" aria-label="${t("promo.title")}">
+            <button type="button" class="promo-close" onclick="dismissPromoModal()" aria-label="${t("common.close")}">&times;</button>
+            <img src="/src/assets/promo-different-start.jpg" alt="${t("promo.imgAlt", { school: escapeHtml(school.name) })}" />
             <div class="promo-modal-body">
-              <p>Ready to help your child start? Book a free trial class today.</p>
-              <button type="button" class="promo-cta" onclick="openPromoForm()">Fill the form</button>
+              <h3>${t("promo.title")}</h3>
+              <p>${t("promo.body")}</p>
+              <button type="button" class="promo-cta" onclick="openPromoForm()">${t("promo.cta")}</button>
             </div>
           </div>
         </div>
       ` : ""}
       ${showReviewForm ? `
         <div class="promo-overlay" onclick="if (event.target === this) closeReviewForm()">
-          <div class="review-modal" role="dialog" aria-modal="true" aria-label="Leave a review">
-            <button type="button" class="promo-close" onclick="closeReviewForm()" aria-label="Close">&times;</button>
+          <div class="review-modal" role="dialog" aria-modal="true" aria-label="${t("marketing.reviews.form.title")}">
+            <button type="button" class="promo-close" onclick="closeReviewForm()" aria-label="${t("common.close")}">&times;</button>
             <form class="m-review-form" onsubmit="handleReviewSubmit(event)">
-              <h3>Leave a review</h3>
-              <p class="m-sub">Tell other parents about your child's experience — it helps other families decide.</p>
-              ${reviewNotice ? `<p class="notice-row ${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${reviewNotice.message}<button type="button" class="notice-dismiss" onclick="dismissReviewNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
+              <h3>${t("marketing.reviews.form.title")}</h3>
+              <p class="m-sub">${t("marketing.reviews.form.sub")}</p>
+              ${reviewNotice ? `<p class="notice-row ${reviewNotice.type === "error" ? "auth-error" : "m-success"}">${escapeHtml(reviewNotice.message)}<button type="button" class="notice-dismiss" onclick="dismissReviewNotice()" aria-label="${t("common.dismiss")}">&times;</button></p>` : ""}
               <div class="m-review-form-grid">
-                <label>Your name<input type="text" name="name" required /></label>
-                <label>You are a... (optional)<input type="text" name="roleOrSchool" placeholder="e.g. Parent of a Code Builders student" /></label>
+                <label>${t("marketing.reviews.form.name")}<input type="text" name="name" required /></label>
+                <label>${t("marketing.reviews.form.roleOrSchool")}<input type="text" name="roleOrSchool" placeholder="${t("marketing.reviews.form.roleOrSchool.placeholder")}" /></label>
               </div>
-              <label>Rating
+              <label>${t("marketing.reviews.form.rating")}
                 <select name="rating">
                   <option value="5">★★★★★ (5)</option>
                   <option value="4">★★★★☆ (4)</option>
@@ -2961,92 +2802,94 @@ function marketingScreen() {
                   <option value="1">★☆☆☆☆ (1)</option>
                 </select>
               </label>
-              <label>Your review<textarea name="quote" rows="3" required></textarea></label>
-              <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? "Sending…" : "Submit review"}</button>
-              <small>Reviews are checked by a Manager before they go live.</small>
+              <label>${t("marketing.reviews.form.quote")}<textarea name="quote" rows="3" required></textarea></label>
+              <button type="submit" ${state.reviewBusy ? "disabled" : ""}>${state.reviewBusy ? t("common.sending") : t("marketing.reviews.form.submit")}</button>
+              <small>${t("marketing.reviews.form.note")}</small>
             </form>
           </div>
         </div>
       ` : ""}
       <header class="m-nav">
         <div class="brand">
-          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="Hero Tech Academy" />
+          <img class="brand-mark" src="/src/assets/logo-icon.png" alt="${escapeHtml(school.name)}" />
           <strong>${escapeHtml(school.name)}</strong>
         </div>
         <nav class="m-nav-links" aria-label="Marketing navigation">
-          <a href="#how">How it works</a>
-          <a href="#features">Programs</a>
-          <a href="#compare">Compare</a>
-          <a href="#reviews">Reviews</a>
-          <a href="#careers">Work With Us</a>
-          <a href="#contact">Contact</a>
+          <a href="#how">${t("marketing.nav.how")}</a>
+          <a href="#features">${t("marketing.nav.features")}</a>
+          <a href="#compare">${t("marketing.nav.compare")}</a>
+          <a href="#gallery">${t("marketing.nav.gallery")}</a>
+          <a href="#reviews">${t("marketing.nav.reviews")}</a>
+          <a href="#careers">${t("marketing.nav.careers")}</a>
+          <a href="#contact">${t("marketing.nav.contact")}</a>
         </nav>
         <div class="m-nav-social">${socialLinksHtml()}</div>
-        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="Switch between light and dark mode" title="Switch between light and dark mode">${state.theme === "dark" ? "☀" : "☾"}</button>
-        <button class="m-login-button" onclick="beginLogin()">Login</button>
+        ${langSwitcherHtml("m-lang")}
+        <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
+        <button class="m-login-button" onclick="beginLogin()">${t("footer.login")}</button>
       </header>
 
       <section class="m-hero">
-        <p class="eyebrow">Coding courses for kids</p>
-        <h1>Where Kids Learn to Code, Create, and Build Real Projects</h1>
-        <p class="m-sub">Live, instructor-led coding classes for kids — small groups, real projects, and a secure portal so parents can follow every step of their child's progress.</p>
+        <p class="eyebrow">${t("marketing.hero.eyebrow")}</p>
+        <h1>${t("marketing.hero.title")}</h1>
+        <p class="m-sub">${t("marketing.hero.sub")}</p>
         <div class="m-hero-actions">
-          <a class="m-cta-primary" href="#contact">Book a free trial class</a>
-          <a class="m-cta-secondary" href="#features">View our programs</a>
+          <a class="m-cta-primary" href="#contact">${t("marketing.hero.cta.primary")}</a>
+          <a class="m-cta-secondary" href="#features">${t("marketing.hero.cta.secondary")}</a>
         </div>
         <div class="m-stats">
-          ${trustStats.map((stat) => `<div class="m-stat reveal"><strong>${stat.value}</strong><span>${stat.label}</span></div>`).join("")}
+          ${trustStats.map((stat) => `<div class="m-stat reveal"><strong>${stat.isCount ? "60+" : t(stat.valueKey)}</strong><span>${stat.isCount ? t(stat.labelKey, { count: "" }).replace("  ", " ").trim() : t(stat.labelKey)}</span></div>`).join("")}
         </div>
       </section>
 
       <section id="how" class="m-section reveal">
-        <h2>How It Works</h2>
-        <p class="m-sub">Getting started takes three simple steps.</p>
+        <h2>${t("marketing.how.title")}</h2>
+        <p class="m-sub">${t("marketing.how.sub")}</p>
         <div class="m-cards">
           ${howItWorks.map((item) => `
             <article class="m-card reveal">
               <span class="m-step">${item.step}</span>
-              <h3>${item.title}</h3>
-              <p>${item.desc}</p>
+              <h3>${t(`marketing.how.${item.key}.title`)}</h3>
+              <p>${t(`marketing.how.${item.key}.desc`)}</p>
             </article>
           `).join("")}
         </div>
       </section>
 
       <section id="features" class="m-section reveal">
-        <h2>Our Coding Programs</h2>
-        <p class="m-sub">Structured tracks by age, so every child starts at the right level.</p>
+        <h2>${t("marketing.programs.title")}</h2>
+        <p class="m-sub">${t("marketing.programs.sub")}</p>
         <div class="m-cards">
           ${programTracks.map((track) => `
             <article class="m-card reveal">
-              <h3>${track.name} <span class="m-age">${track.age}</span></h3>
-              <p>${track.desc}</p>
-              <div class="m-skills">${track.skills.map((skill) => `<span class="m-skill-tag">${skill}</span>`).join("")}</div>
+              <h3>${t(`program.${track.key}.name`)} <span class="m-age">${t(`program.${track.key}.age`)}</span></h3>
+              <p>${t(`program.${track.key}.desc`)}</p>
+              <div class="m-skills">${Array.from({ length: track.skillCount }, (_, i) => `<span class="m-skill-tag">${t(`program.${track.key}.skill${i + 1}`)}</span>`).join("")}</div>
             </article>
           `).join("")}
         </div>
-        <p class="m-sub">Every student gets a secure login to track their own attendance, assignments, and progress — and parents can follow along too.</p>
+        <p class="m-sub">${t("marketing.programs.footnote")}</p>
       </section>
 
       <section id="compare" class="m-section reveal">
-        <h2>How We Compare</h2>
-        <p class="m-sub">How ${escapeHtml(school.name)} stacks up against common alternatives for kids' coding education.</p>
+        <h2>${t("marketing.compare.title")}</h2>
+        <p class="m-sub">${t("marketing.compare.sub", { school: escapeHtml(school.name) })}</p>
         <div class="m-compare-grid">
           ${[
             { name: school.name, highlight: true, index: 0 },
-            { name: "Pre-recorded video courses", highlight: false, index: 1 },
-            { name: "One-off workshops", highlight: false, index: 2 },
+            { nameKey: "marketing.compare.videoCourses", highlight: false, index: 1 },
+            { nameKey: "marketing.compare.workshops", highlight: false, index: 2 },
           ].map(
             (col) => `
             <article class="m-compare-card ${col.highlight ? "m-compare-highlight" : ""} reveal">
-              ${col.highlight ? `<span class="m-compare-badge">Us</span>` : ""}
-              <h3>${escapeHtml(col.name)}</h3>
+              ${col.highlight ? `<span class="m-compare-badge">${t("marketing.compare.us")}</span>` : ""}
+              <h3>${col.highlight ? escapeHtml(col.name) : t(col.nameKey)}</h3>
               <ul class="m-compare-list">
                 ${compareRows
                   .map((row) => {
-                    const label = row[0];
+                    const labelKey = row[0];
                     const status = row[col.index + 1];
-                    return `<li class="m-compare-row m-compare-${status}">${compareIcon(status)}<span>${label}</span></li>`;
+                    return `<li class="m-compare-row m-compare-${status}">${compareIcon(status)}<span>${t(labelKey)}</span></li>`;
                   })
                   .join("")}
               </ul>
@@ -3056,13 +2899,29 @@ function marketingScreen() {
         </div>
       </section>
 
+      <section id="gallery" class="m-section reveal">
+        <h2>${t("marketing.gallery.title")}</h2>
+        <p class="m-sub">${t("marketing.gallery.sub")}</p>
+        ${
+          galleryItems.length
+            ? `<div class="m-gallery-grid">${galleryItems
+                .map((item) =>
+                  item.type === "video"
+                    ? `<div class="m-gallery-item reveal"><video controls preload="metadata" ${item.poster ? `poster="${escapeHtml(item.poster)}"` : ""}><source src="${escapeHtml(item.src)}" /></video></div>`
+                    : `<div class="m-gallery-item reveal"><img src="${escapeHtml(item.src)}" alt="${escapeHtml(item.alt || "")}" loading="lazy" /></div>`,
+                )
+                .join("")}</div>`
+            : `<div class="m-gallery-empty reveal"><p class="empty">${t("marketing.gallery.empty")}</p></div>`
+        }
+      </section>
+
       <section id="reviews" class="m-section reveal">
         <div class="m-section-head">
           <div>
-            <h2>What Parents &amp; Students Say</h2>
-            <p class="m-sub">We've trained <strong>60+ students</strong> so far — here's what a few of them have to say.</p>
+            <h2>${t("marketing.reviews.title")}</h2>
+            <p class="m-sub">${t("marketing.reviews.sub", { count: "60" })}</p>
           </div>
-          <button type="button" class="m-review-cta" onclick="openReviewForm()"><span aria-hidden="true">★</span> Leave a review</button>
+          <button type="button" class="m-review-cta" onclick="openReviewForm()"><span aria-hidden="true">★</span> ${t("marketing.reviews.cta")}</button>
         </div>
         <div class="m-cards">
           ${allReviews.map((review) => `
@@ -3077,8 +2936,8 @@ function marketingScreen() {
       </section>
 
       <section id="careers" class="m-section reveal">
-        <h2>Work With Us</h2>
-        <p class="m-sub">${escapeHtml(school.name)} is growing — here's what we're hiring for right now.</p>
+        <h2>${t("marketing.careers.title")}</h2>
+        <p class="m-sub">${t("marketing.careers.sub", { school: escapeHtml(school.name) })}</p>
         <div class="m-cards">
           ${
             state.publicOpportunities.length
@@ -3087,34 +2946,34 @@ function marketingScreen() {
                     (op) => `
               <article class="m-card reveal">
                 <h3>${escapeHtml(op.title)}</h3>
-                <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || "Details on request"}</p>
+                <p class="m-sub">${escapeHtml([op.employment_type, op.location].filter(Boolean).join(" · ")) || t("marketing.careers.detailsOnRequest")}</p>
                 ${op.description ? `<p>${escapeHtml(op.description.length > 160 ? `${op.description.slice(0, 160)}…` : op.description)}</p>` : ""}
-                <button type="button" class="m-cta-secondary" onclick="openOpportunityDetail('${escapeJs(op.id)}')">View details &amp; apply</button>
+                <button type="button" class="m-cta-secondary" onclick="openOpportunityDetail('${escapeJs(op.id)}')">${t("marketing.careers.viewDetails")}</button>
               </article>
             `,
                   )
                   .join("")
-              : `<p class="empty">No open roles right now — check back soon, or introduce yourself using the contact form below.</p>`
+              : `<p class="empty">${t("marketing.careers.empty")}</p>`
           }
         </div>
-        <a class="m-cta-secondary" href="#contact">Interested? Get in touch</a>
+        <a class="m-cta-secondary" href="#contact">${t("marketing.careers.interested")}</a>
       </section>
 
       <section id="contact" class="m-section m-contact reveal">
         <div class="m-contact-grid">
           <div>
-            <h2>Contact us</h2>
-            <p class="m-sub">Want to book a free trial class, ask about pricing, or find the right program for your child? Send a message, request a call back, or reach us directly.</p>
+            <h2>${t("marketing.contact.title")}</h2>
+            <p class="m-sub">${t("marketing.contact.sub")}</p>
             <div class="m-contact-social">${socialLinksHtml()}</div>
           </div>
           <form class="m-contact-form" onsubmit="handleContactSubmit(event)">
-            ${notice ? `<p class="notice-row ${notice.type === "error" ? "auth-error" : "m-success"}">${notice.message}<button type="button" class="notice-dismiss" onclick="dismissContactNotice()" aria-label="Dismiss">&times;</button></p>` : ""}
-            <label>Name<input type="text" name="name" required /></label>
-            <label>Email<input type="email" name="email" required /></label>
-            <label>Phone (optional)<input type="tel" name="phone" /></label>
-            <label>Message<textarea name="message" rows="4"></textarea></label>
-            <label class="checkline"><input type="checkbox" name="wantsCall" /> Request a call back instead of email</label>
-            <button type="submit" ${state.contactBusy ? "disabled" : ""}>${state.contactBusy ? "Sending…" : "Send message"}</button>
+            ${notice ? `<p class="notice-row ${notice.type === "error" ? "auth-error" : "m-success"}">${escapeHtml(notice.message)}<button type="button" class="notice-dismiss" onclick="dismissContactNotice()" aria-label="${t("common.dismiss")}">&times;</button></p>` : ""}
+            <label>${t("marketing.contact.name")}<input type="text" name="name" required /></label>
+            <label>${t("marketing.contact.email")}<input type="email" name="email" required /></label>
+            <label>${t("marketing.contact.phone")}<input type="tel" name="phone" /></label>
+            <label>${t("marketing.contact.message")}<textarea name="message" rows="4"></textarea></label>
+            <label class="checkline"><input type="checkbox" name="wantsCall" /> ${t("marketing.contact.wantsCall")}</label>
+            <button type="submit" ${state.contactBusy ? "disabled" : ""}>${state.contactBusy ? t("common.sending") : t("marketing.contact.submit")}</button>
           </form>
         </div>
       </section>
@@ -3122,16 +2981,16 @@ function marketingScreen() {
       <footer class="m-footer">
         <span>&copy; ${new Date().getFullYear()} ${escapeHtml(school.name)}</span>
         <div class="m-footer-social">${socialLinksHtml()}</div>
-        <button class="m-login-button" onclick="beginLogin()">Login</button>
+        <button class="m-login-button" onclick="beginLogin()">${t("footer.login")}</button>
       </footer>
     </div>
   `;
 }
 
-// The "book a trial class" popup shows on every visit to the homepage
-// (including a plain page refresh) — dismissing it only clears the
-// in-memory flag for the rest of this page load, nothing is remembered
-// in storage, so reloading the page brings it back.
+// The "group offer" popup shows on every visit to the homepage (including
+// a plain page refresh) — dismissing it only clears the in-memory flag
+// for the rest of this page load, nothing is remembered in storage, so
+// reloading the page brings it back.
 function dismissPromoModal() {
   state.promoModalDismissed = true;
   render();
@@ -3144,7 +3003,7 @@ function openPromoForm() {
   dismissPromoModal();
   requestAnimationFrame(() => {
     document.getElementById("contact")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    document.querySelector(".m-contact-form input[name='name']")?.focus();
+    document.querySelector(".m-contact-form textarea[name='message']")?.focus();
   });
 }
 
@@ -3215,7 +3074,7 @@ async function handleContactSubmit(event) {
   const wantsCall = form.wantsCall.checked;
 
   if (!name || !email) {
-    state.contactNotice = { type: "error", message: "Please add your name and email." };
+    state.contactNotice = { type: "error", message: t("marketing.contact.needFields") };
     render();
     return;
   }
@@ -3245,18 +3104,16 @@ async function handleContactSubmit(event) {
           },
         ]),
       });
-      if (!response.ok) throw new Error("Could not send your message. Please try again or email us directly.");
+      if (!response.ok) throw new Error(t("marketing.contact.sendError"));
     } else {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
     state.contactNotice = {
       type: "success",
-      message: wantsCall
-        ? "Thanks! We received your request and will call you back shortly."
-        : "Thanks! Your message has been sent.",
+      message: wantsCall ? t("marketing.contact.thanksCall") : t("marketing.contact.thanksMessage"),
     };
   } catch (error) {
-    state.contactNotice = { type: "error", message: error.message || "Something went wrong. Please try again." };
+    state.contactNotice = { type: "error", message: error.message || t("marketing.contact.error") };
   } finally {
     state.contactBusy = false;
     render();
@@ -3296,7 +3153,7 @@ async function handleReviewSubmit(event) {
   const rating = Number(form.rating.value) || 5;
 
   if (!name || !quote) {
-    state.reviewNotice = { type: "error", message: "Please add your name and a short review." };
+    state.reviewNotice = { type: "error", message: t("marketing.reviews.needFields") };
     render();
     return;
   }
@@ -3318,14 +3175,14 @@ async function handleReviewSubmit(event) {
         },
         body: JSON.stringify([{ name, role_or_school: roleOrSchool || null, quote, rating }]),
       });
-      if (!response.ok) throw new Error("Could not submit your review. Please try again.");
+      if (!response.ok) throw new Error(t("marketing.reviews.error"));
     } else {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
-    state.reviewNotice = { type: "success", message: "Thanks! Your review is in — it'll appear here once a Manager approves it." };
+    state.reviewNotice = { type: "success", message: t("marketing.reviews.thanks") };
     form.reset();
   } catch (error) {
-    state.reviewNotice = { type: "error", message: error.message || "Something went wrong. Please try again." };
+    state.reviewNotice = { type: "error", message: error.message || t("marketing.reviews.error") };
   } finally {
     state.reviewBusy = false;
     render();
@@ -3347,7 +3204,6 @@ function closeReviewForm() {
   state.reviewNotice = null;
   render();
 }
-
 function canManageAccounts() {
   return ["Super Admin", "School Admin", "Instructor"].includes(state.role);
 }
@@ -3355,19 +3211,19 @@ function canManageAccounts() {
 // A dedicated Instructors directory for Managers — separate from the
 // generic Accounts & Logins list — so adding a new instructor profile and
 // issuing their first login both happen from one obvious place, before a
-// Manager ever needs to think about classes or students.
+// Manager ever needs to think about groups or students.
 function instructorRow(instructor) {
   const directory = state.accountsDirectory;
   const account = directory?.find((row) => row.instructor_name === instructor.name);
-  const ownClasses = classes.filter((item) => item.instructor === instructor.name);
+  const ownGroups = groups.filter((item) => item.instructor === instructor.name);
   const key = `instructor-${instructor.name}`;
   const busy = state.accountsBusy === key;
   const status = account
     ? account.must_change_password
-      ? badge("Invited")
-      : badge("Active")
-    : `<span class="muted-pill">Not set up</span>`;
-  const actionLabel = account ? "Reset password" : "Generate login";
+      ? badge(t("accounts.status.invited"))
+      : badge(t("accounts.status.active"))
+    : `<span class="muted-pill">${t("accounts.status.notSetUp")}</span>`;
+  const actionLabel = account ? t("accounts.resetPassword") : t("accounts.generateLogin");
   const handlerName = account ? "resetCredentials" : "generateCredentials";
   const handler = `${handlerName}('${key}', 'Instructor', '${escapeJs(instructor.email)}', '${escapeJs(instructor.name)}', '${escapeJs(instructor.name)}')`;
   const canRemove = canRemoveAccounts(state.role);
@@ -3378,11 +3234,11 @@ function instructorRow(instructor) {
     <tr>
       <td><strong>${escapeHtml(instructor.name)}</strong></td>
       <td>${escapeHtml(instructor.email)}</td>
-      <td>${ownClasses.length ? ownClasses.map((c) => escapeHtml(c.name)).join(", ") : "No classes yet"}</td>
+      <td>${ownGroups.length ? ownGroups.map((g) => escapeHtml(g.name)).join(", ") : t("instructors.noGroupsYet")}</td>
       <td>${status}</td>
       <td>
-        <button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? "Working…" : actionLabel}</button>
-        ${canRemove ? `<button onclick="handleRemoveInstructor('${escapeJs(instructor.name)}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? "Removing…" : "Remove"}</button>` : ""}
+        <button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? t("common.working") : actionLabel}</button>
+        ${canRemove ? `<button onclick="handleRemoveInstructor('${escapeJs(instructor.name)}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("common.remove")}</button>` : ""}
       </td>
     </tr>
   `;
@@ -3394,13 +3250,13 @@ function instructorsView() {
   return `
     ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
     <div class="toolbar">
-      ${canCreateInstructorProfiles(state.role) ? `<button onclick="openModal('addInstructor')">Add instructor</button>` : ""}
+      ${canCreateInstructorProfiles(state.role) ? `<button onclick="openModal('addInstructor')">${t("instructors.add")}</button>` : ""}
     </div>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Instructors</h2><span>${people.instructors.length} on staff</span></div>
+      <div class="panel-head"><h2>${t("nav.instructors")}</h2><span>${t("instructors.onStaff", { count: people.instructors.length })}</span></div>
       <table>
-        <thead><tr><th>Name</th><th>Email</th><th>Classes</th><th>Portal access</th><th>Action</th></tr></thead>
-        <tbody>${rows.join("") || `<tr><td colspan="5" class="empty">No instructors yet — add one to get started.</td></tr>`}</tbody>
+        <thead><tr><th>${t("instructors.table.name")}</th><th>${t("instructors.table.email")}</th><th>${t("instructors.table.groups")}</th><th>${t("instructors.table.access")}</th><th>${t("common.action")}</th></tr></thead>
+        <tbody>${rows.join("") || `<tr><td colspan="5" class="empty">${t("instructors.noneYet")}</td></tr>`}</tbody>
       </table>
     </section>
   `;
@@ -3409,10 +3265,10 @@ function instructorsView() {
 // Removing an instructor is Manager-only and irreversible: it deletes both
 // the instructor's school record and their portal login (if one was ever
 // issued), via api/remove-account.js. The server itself refuses if the
-// instructor still has classes assigned, so a Manager sees that reason
-// directly rather than a generic failure.
+// instructor still owns groups, so a Manager sees that reason directly
+// rather than a generic failure.
 async function handleRemoveInstructor(name) {
-  if (!window.confirm(`Remove ${name}? This deletes their instructor record and login. This can't be undone.`)) return;
+  if (!window.confirm(t("instructors.confirmRemove", { name }))) return;
   const key = `remove-instructor-${name}`;
   state.accountsBusy = key;
   state.accountsNotice = null;
@@ -3420,9 +3276,9 @@ async function handleRemoveInstructor(name) {
   try {
     await removeAccountApi({ role: "Instructor", ref: name });
     await refreshAfterWrite();
-    state.accountsNotice = { type: "removed", message: `${name} was removed.` };
+    state.accountsNotice = { type: "removed", message: t("instructors.removedNotice", { name }) };
   } catch (error) {
-    state.accountsNotice = { type: "error", message: error.message };
+    state.accountsNotice = { type: "error", message: error.message || t("instructors.removeError") };
   } finally {
     state.accountsBusy = null;
     renderContentOnly();
@@ -3434,10 +3290,10 @@ function accountsView() {
   const directory = state.accountsDirectory;
   const accountFor = (refId) => directory?.find((row) => row.student_id === refId);
 
-  // Instructor logins now live on their own "Instructors" tab (above
-  // Students in the sidebar) so a Manager doesn't have to hunt for them
-  // here — this panel is Student logins plus, for a Manager, adding
-  // another Manager.
+  // Instructor logins live on their own "Instructors" tab (above Students
+  // in the sidebar) so a Manager doesn't have to hunt for them here —
+  // this panel is Student logins plus, for a Manager, adding another
+  // Manager.
   const visibleStudents = isInstructor ? filterStudentsForViewer(currentViewer(), people.students) : people.students;
   const studentRows = visibleStudents.map((student) =>
     accountRow({
@@ -3453,16 +3309,16 @@ function accountsView() {
   const isManager = ["Super Admin", "School Admin"].includes(state.role);
   return `
     ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
-    ${isInstructor ? `<p class="hint">You can issue or reset a login for students in your own classes only. Ask a Manager for instructor or manager accounts.</p>` : `<p class="hint">Looking for instructor logins? See the <button onclick="navigate('instructors')">Instructors</button> tab.</p>`}
+    ${isInstructor ? `<p class="hint">${t("accounts.hint.instructor")}</p>` : `<p class="hint">${t("accounts.hint.other", { link: `<button type="button" onclick="navigate('instructors')">${t("nav.instructors")}</button>` })}</p>`}
     <div class="toolbar">
-      ${isManager ? `<button onclick="openModal('addManager')">Add manager</button>` : ""}
-      ${canCreateStudentProfiles(state.role) ? `<button onclick="openModal('addStudent')">Add student</button>` : ""}
+      ${isManager ? `<button onclick="openModal('addManager')">${t("accounts.addManager")}</button>` : ""}
+      ${canCreateStudentProfiles(state.role) ? `<button onclick="openModal('addStudent')">${t("accounts.addStudent")}</button>` : ""}
     </div>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Student Logins</h2><span>${directory ? directory.length : 0} accounts issued</span></div>
+      <div class="panel-head"><h2>${t("accounts.studentLogins")}</h2><span>${t("accounts.issued", { count: directory ? directory.length : 0 })}</span></div>
       <table>
-        <thead><tr><th>Name</th><th>Role</th><th>Username (email)</th><th>Portal access</th><th>Action</th></tr></thead>
-        <tbody>${studentRows.join("") || `<tr><td colspan="5" class="empty">No accounts to manage yet.</td></tr>`}</tbody>
+        <thead><tr><th>${t("accounts.table.name")}</th><th>${t("accounts.table.role")}</th><th>${t("accounts.table.username")}</th><th>${t("accounts.table.access")}</th><th>${t("common.action")}</th></tr></thead>
+        <tbody>${studentRows.join("") || `<tr><td colspan="5" class="empty">${t("accounts.none")}</td></tr>`}</tbody>
       </table>
     </section>
   `;
@@ -3472,15 +3328,15 @@ function leadsView() {
   const leads = state.leadsDirectory || [];
   return `
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Contact Requests</h2><span>${leads.length} received</span></div>
+      <div class="panel-head"><h2>${t("leads.title")}</h2><span>${t("leads.received", { count: leads.length })}</span></div>
       <table>
-        <thead><tr><th>Received</th><th>Type</th><th>Name</th><th>Email</th><th>Phone</th><th>Message</th></tr></thead>
+        <thead><tr><th>${t("leads.table.received")}</th><th>${t("leads.table.type")}</th><th>${t("leads.table.name")}</th><th>${t("leads.table.email")}</th><th>${t("leads.table.phone")}</th><th>${t("leads.table.message")}</th></tr></thead>
         <tbody>${
           leads
             .map(
-              (lead) => `<tr><td>${new Date(lead.created_at).toLocaleString()}</td><td>${badge(lead.kind === "call_request" ? "Call requested" : "Contact")}</td><td><strong>${escapeHtml(lead.name)}</strong></td><td>${escapeHtml(lead.email)}</td><td>${escapeHtml(lead.phone) || "—"}</td><td>${escapeHtml(lead.message) || "—"}</td></tr>`,
+              (lead) => `<tr><td>${new Date(lead.created_at).toLocaleString()}</td><td>${badge(lead.kind === "call_request" ? t("leads.type.call") : t("leads.type.contact"))}</td><td><strong>${escapeHtml(lead.name)}</strong></td><td>${escapeHtml(lead.email)}</td><td>${escapeHtml(lead.phone) || "—"}</td><td>${escapeHtml(lead.message) || "—"}</td></tr>`,
             )
-            .join("") || `<tr><td colspan="6" class="empty">No messages yet.</td></tr>`
+            .join("") || `<tr><td colspan="6" class="empty">${t("leads.none")}</td></tr>`
         }</tbody>
       </table>
     </section>
@@ -3492,24 +3348,24 @@ function reviewsView() {
   const pending = reviews.filter((r) => r.status === "pending");
   const decided = reviews.filter((r) => r.status !== "pending");
   return `
-    <p class="hint">Reviews submitted from the homepage land here as "Pending" and never appear publicly until you approve them.</p>
+    <p class="hint">${t("reviews.hint")}</p>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Pending review</h2><span>${pending.length} waiting</span></div>
+      <div class="panel-head"><h2>${t("reviews.pending")}</h2><span>${t("reviews.waiting", { count: pending.length })}</span></div>
       <table>
-        <thead><tr><th>Received</th><th>Name</th><th>Quote</th><th>Rating</th><th>Action</th></tr></thead>
-        <tbody>${pending.map(reviewRow).join("") || `<tr><td colspan="5" class="empty">Nothing pending.</td></tr>`}</tbody>
+        <thead><tr><th>${t("reviews.table.received")}</th><th>${t("reviews.table.name")}</th><th>${t("reviews.table.quote")}</th><th>${t("reviews.table.rating")}</th><th>${t("common.action")}</th></tr></thead>
+        <tbody>${pending.map(reviewRow).join("") || `<tr><td colspan="5" class="empty">${t("reviews.none.pending")}</td></tr>`}</tbody>
       </table>
     </section>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Decided</h2><span>${decided.length} reviewed</span></div>
+      <div class="panel-head"><h2>${t("reviews.decided")}</h2><span>${t("reviews.reviewed", { count: decided.length })}</span></div>
       <table>
-        <thead><tr><th>Received</th><th>Name</th><th>Quote</th><th>Rating</th><th>Status</th></tr></thead>
+        <thead><tr><th>${t("reviews.table.received")}</th><th>${t("reviews.table.name")}</th><th>${t("reviews.table.quote")}</th><th>${t("reviews.table.rating")}</th><th>${t("common.status")}</th></tr></thead>
         <tbody>${
           decided
             .map(
-              (r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td><strong>${escapeHtml(r.name)}</strong></td><td dir="auto">${escapeHtml(r.quote)}</td><td>${"★".repeat(r.rating || 5)}</td><td>${badge(r.status === "approved" ? "Approved" : "Rejected")}</td></tr>`,
+              (r) => `<tr><td>${new Date(r.created_at).toLocaleString()}</td><td><strong>${escapeHtml(r.name)}</strong></td><td dir="auto">${escapeHtml(r.quote)}</td><td>${"★".repeat(r.rating || 5)}</td><td>${badge(r.status === "approved" ? t("reviews.status.approved") : t("reviews.status.rejected"))}</td></tr>`,
             )
-            .join("") || `<tr><td colspan="5" class="empty">No decisions yet.</td></tr>`
+            .join("") || `<tr><td colspan="5" class="empty">${t("reviews.none.decided")}</td></tr>`
         }</tbody>
       </table>
     </section>
@@ -3525,8 +3381,8 @@ function reviewRow(review) {
       <td dir="auto">${escapeHtml(review.quote)}</td>
       <td>${"★".repeat(review.rating || 5)}</td>
       <td>
-        <button onclick="setReviewStatus('${review.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? "Working…" : "Approve"}</button>
-        <button onclick="setReviewStatus('${review.id}', 'rejected')" ${busy ? "disabled" : ""}>Reject</button>
+        <button onclick="setReviewStatus('${review.id}', 'approved')" ${busy ? "disabled" : ""}>${busy ? t("common.working") : t("common.approve")}</button>
+        <button onclick="setReviewStatus('${review.id}', 'rejected')" ${busy ? "disabled" : ""}>${t("reviews.reject")}</button>
       </td>
     </tr>
   `;
@@ -3577,23 +3433,22 @@ async function setReviewStatus(id, status) {
 
 // ---------------------------------------------------------------------
 // Opportunities ("Work With Us"): a Manager posts and removes job
-// openings from here. Anything marked "Open" is what the public homepage
+// openings here. Anything marked "Open" is what the public homepage
 // section (see marketingScreen()) shows to signed-out visitors — enforced
-// by Supabase RLS (0009_opportunities_and_removal_requests.sql), not by
-// this view.
+// by Supabase RLS, not by this view.
 // ---------------------------------------------------------------------
 
 function opportunitiesView() {
   const rows = state.opportunitiesDirectory || [];
   return `
     ${state.opportunitiesNotice ? opportunitiesNoticeBanner(state.opportunitiesNotice) : ""}
-    <p class="hint">Opportunities marked "Open" appear publicly on the homepage's Work With Us section right away.</p>
-    <div class="toolbar"><button onclick="openModal('addOpportunity')">Add opportunity</button></div>
+    <p class="hint">${t("opportunities.hint")}</p>
+    <div class="toolbar"><button onclick="openModal('addOpportunity')">${t("opportunities.add")}</button></div>
     <section class="panel table-panel">
-      <div class="panel-head"><h2>Opportunities</h2><span>${rows.length} total</span></div>
+      <div class="panel-head"><h2>${t("nav.opportunities")}</h2><span>${t("opportunities.total", { count: rows.length })}</span></div>
       <table>
-        <thead><tr><th>Title</th><th>Location</th><th>Type</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>${rows.map(opportunityRow).join("") || `<tr><td colspan="5" class="empty">No opportunities yet — add one to get started.</td></tr>`}</tbody>
+        <thead><tr><th>${t("opportunities.table.title")}</th><th>${t("opportunities.table.location")}</th><th>${t("opportunities.table.type")}</th><th>${t("common.status")}</th><th>${t("common.action")}</th></tr></thead>
+        <tbody>${rows.map(opportunityRow).join("") || `<tr><td colspan="5" class="empty">${t("opportunities.none")}</td></tr>`}</tbody>
       </table>
     </section>
   `;
@@ -3607,10 +3462,10 @@ function opportunityRow(op) {
       <td><strong>${escapeHtml(op.title)}</strong>${op.description ? `<span>${escapeHtml(op.description)}</span>` : ""}</td>
       <td>${escapeHtml(op.location) || "—"}</td>
       <td>${escapeHtml(op.employment_type) || "—"}</td>
-      <td>${badge(isOpen ? "Open" : "Closed")}</td>
+      <td>${badge(isOpen ? t("opportunities.status.open") : t("opportunities.status.closed"))}</td>
       <td>
-        <button onclick="setOpportunityStatus('${op.id}', '${isOpen ? "closed" : "open"}')" ${busy ? "disabled" : ""}>${busy ? "Working…" : isOpen ? "Close" : "Reopen"}</button>
-        <button onclick="removeOpportunity('${op.id}', '${escapeJs(op.title)}')" ${busy ? "disabled" : ""}>Remove</button>
+        <button onclick="setOpportunityStatus('${op.id}', '${isOpen ? "closed" : "open"}')" ${busy ? "disabled" : ""}>${busy ? t("common.working") : isOpen ? t("opportunities.close") : t("opportunities.reopen")}</button>
+        <button onclick="removeOpportunity('${op.id}', '${escapeJs(op.title)}')" ${busy ? "disabled" : ""}>${t("common.remove")}</button>
       </td>
     </tr>
   `;
@@ -3619,7 +3474,7 @@ function opportunityRow(op) {
 function opportunitiesNoticeBanner(notice) {
   return `
     <section class="panel credential-reveal error">
-      <div class="panel-head"><h2>Could not complete that request</h2><button onclick="dismissOpportunitiesNotice()">Dismiss</button></div>
+      <div class="panel-head"><h2>${t("accounts.notice.errorTitle")}</h2><button onclick="dismissOpportunitiesNotice()">${t("common.dismiss")}</button></div>
       <p>${escapeHtml(notice.message)}</p>
     </section>
   `;
@@ -3632,23 +3487,23 @@ function dismissOpportunitiesNotice() {
 
 function addOpportunityModal() {
   return `
-    <h2>Add an opportunity</h2>
-    <p class="hint">Published as "Open" immediately — visible on the homepage's Work With Us section right away.</p>
+    <h2>${t("opportunities.form.title")}</h2>
+    <p class="hint">${t("opportunities.form.hint")}</p>
     ${modalMessages()}
     <form onsubmit="handleAddOpportunity(event)">
-      <label>Title<input type="text" name="title" required /></label>
-      <label>Location<input type="text" name="location" placeholder="e.g. On-site, or Remote" /></label>
-      <label>Type
+      <label>${t("opportunities.form.titleField")}<input type="text" name="title" required /></label>
+      <label>${t("opportunities.form.location")}<input type="text" name="location" placeholder="${t("opportunities.form.locationPlaceholder")}" /></label>
+      <label>${t("opportunities.form.type")}
         <select name="employmentType">
-          <option value="Full-time">Full-time</option>
-          <option value="Part-time">Part-time</option>
-          <option value="Contract">Contract</option>
-          <option value="Volunteer">Volunteer</option>
+          <option value="Full-time">${t("opportunities.form.type.fullTime")}</option>
+          <option value="Part-time">${t("opportunities.form.type.partTime")}</option>
+          <option value="Contract">${t("opportunities.form.type.contract")}</option>
+          <option value="Volunteer">${t("opportunities.form.type.volunteer")}</option>
         </select>
       </label>
-      <label>Description<textarea name="description" rows="4"></textarea></label>
+      <label>${t("opportunities.form.description")}<textarea name="description" rows="4"></textarea></label>
       <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? "Adding…" : "Add opportunity"}</button>
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.working") : t("opportunities.form.submit")}</button>
       </div>
     </form>
   `;
@@ -3662,7 +3517,7 @@ async function handleAddOpportunity(event) {
   const employmentType = form.employmentType.value;
   const description = form.description.value.trim();
   if (!title) {
-    state.modalError = "Please add a title.";
+    state.modalError = t("opportunities.form.missingFields");
     render();
     return;
   }
@@ -3684,7 +3539,7 @@ async function handleAddOpportunity(event) {
     navigate("opportunities");
   } catch (error) {
     state.modalBusy = false;
-    state.modalError = error.message || "Could not add this opportunity. Please try again in a moment.";
+    state.modalError = error.message || t("opportunities.form.saveError");
     render();
   }
 }
@@ -3752,7 +3607,7 @@ async function setOpportunityStatus(id, status) {
 
 async function removeOpportunity(id, title) {
   if (!state.session) return;
-  if (!window.confirm(`Remove the "${title}" opportunity? This can't be undone.`)) return;
+  if (!window.confirm(t("opportunities.confirmRemove", { title }))) return;
   state.opportunitiesBusy = id;
   renderContentOnly();
   try {
@@ -3765,7 +3620,7 @@ async function removeOpportunity(id, title) {
         Prefer: "return=minimal",
       },
     });
-    if (!response.ok) throw new Error("Could not remove this opportunity.");
+    if (!response.ok) throw new Error(t("opportunities.form.removeError"));
     await loadOpportunitiesDirectory();
   } catch (error) {
     state.opportunitiesNotice = { type: "error", message: error.message };
@@ -3774,15 +3629,14 @@ async function removeOpportunity(id, title) {
     renderContentOnly();
   }
 }
-
 function accountRow({ key, role, name, email, refId, account }) {
   const busy = state.accountsBusy === key;
   const status = account
     ? account.must_change_password
-      ? badge("Invited")
-      : badge("Active")
-    : `<span class="muted-pill">Not set up</span>`;
-  const actionLabel = account ? "Reset password" : "Generate login";
+      ? badge(t("accounts.status.invited"))
+      : badge(t("accounts.status.active"))
+    : `<span class="muted-pill">${t("accounts.status.notSetUp")}</span>`;
+  const actionLabel = account ? t("accounts.resetPassword") : t("accounts.generateLogin");
   const handlerName = account ? "resetCredentials" : "generateCredentials";
   const handler = `${handlerName}('${key}', '${role}', '${escapeJs(email)}', '${escapeJs(name)}', '${escapeJs(refId)}')`;
 
@@ -3792,7 +3646,7 @@ function accountRow({ key, role, name, email, refId, account }) {
       <td>${role}</td>
       <td>${email}</td>
       <td>${status}</td>
-      <td><button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? "Working…" : actionLabel}</button></td>
+      <td><button onclick="${handler}" ${busy ? "disabled" : ""}>${busy ? t("common.working") : actionLabel}</button></td>
     </tr>
   `;
 }
@@ -3801,7 +3655,7 @@ function accountsNoticeBanner(notice) {
   if (notice.type === "error") {
     return `
       <section class="panel credential-reveal error">
-        <div class="panel-head"><h2>Could not complete that request</h2><button onclick="dismissAccountsNotice()">Dismiss</button></div>
+        <div class="panel-head"><h2>${t("accounts.notice.errorTitle")}</h2><button onclick="dismissAccountsNotice()">${t("common.dismiss")}</button></div>
         <p>${escapeHtml(notice.message)}</p>
       </section>
     `;
@@ -3810,7 +3664,7 @@ function accountsNoticeBanner(notice) {
   if (notice.type === "removed") {
     return `
       <section class="panel credential-reveal">
-        <div class="panel-head"><h2>Removed</h2><button onclick="dismissAccountsNotice()">Dismiss</button></div>
+        <div class="panel-head"><h2>${t("accounts.notice.removedTitle")}</h2><button onclick="dismissAccountsNotice()">${t("common.dismiss")}</button></div>
         <p>${escapeHtml(notice.message)}</p>
       </section>
     `;
@@ -3818,13 +3672,13 @@ function accountsNoticeBanner(notice) {
 
   return `
     <section class="panel credential-reveal">
-      <div class="panel-head"><h2>${notice.reset ? "Password reset" : "Login created"} for ${notice.name}</h2><button onclick="dismissAccountsNotice()">Dismiss</button></div>
-      <p>Share these credentials with ${notice.name} now — the password will not be shown again.</p>
+      <div class="panel-head"><h2>${t(notice.reset ? "accounts.notice.resetTitle" : "accounts.notice.createdTitle", { name: notice.name })}</h2><button onclick="dismissAccountsNotice()">${t("common.dismiss")}</button></div>
+      <p>${t("accounts.notice.shareNow", { name: notice.name })}</p>
       <dl>
-        <div><dt>Username (email)</dt><dd><code>${notice.email}</code></dd></div>
-        <div><dt>Temporary password</dt><dd><code>${notice.password}</code></dd></div>
+        <div><dt>${t("accounts.notice.username")}</dt><dd><code>${notice.email}</code></dd></div>
+        <div><dt>${t("accounts.notice.tempPassword")}</dt><dd><code>${notice.password}</code></dd></div>
       </dl>
-      <small>They will be asked to choose their own password the first time they sign in.</small>
+      <small>${t("accounts.notice.willChoose")}</small>
     </section>
   `;
 }
@@ -3884,7 +3738,7 @@ async function callAccountApi(payload) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || "Request failed.");
+    throw new Error(body.error || t("errors.generic"));
   }
   return body;
 }
@@ -3893,7 +3747,7 @@ async function callAccountApi(payload) {
 // endpoint (never a direct table delete from the browser) so the login is
 // revoked in the same step as the school record — see api/remove-account.js.
 async function removeAccountApi(payload) {
-  if (!state.session) throw new Error("Sign in and try again.");
+  if (!state.session) throw new Error(t("errors.generic"));
   const response = await fetch("/api/remove-account", {
     method: "POST",
     headers: {
@@ -3904,7 +3758,7 @@ async function removeAccountApi(payload) {
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body.error || "Request failed.");
+    throw new Error(body.error || t("errors.generic"));
   }
   return body;
 }
@@ -3944,9 +3798,9 @@ function dismissAccountsNotice() {
   renderContentOnly();
 }
 
-function recomputeInstructorClassIds() {
+function recomputeInstructorGroupIds() {
   if (state.viewerContext?.instructorName) {
-    state.viewerContext.classIds = classes
+    state.viewerContext.groupIds = groups
       .filter((item) => item.instructor === state.viewerContext.instructorName)
       .map((item) => item.id);
   }
@@ -3965,7 +3819,7 @@ async function loadViewerProfile(user) {
   const profile = profileRows[0];
 
   if (!profile) {
-    state.authError = "This account is not linked to a school role yet. Ask an admin to set up your portal access.";
+    state.authError = t("auth.notLinked");
     state.session = null;
     storeSession(null);
     state.authMode = "signed-out";
@@ -3977,18 +3831,8 @@ async function loadViewerProfile(user) {
   state.viewerContext = {
     studentId: profile.student_id || null,
     instructorName: profile.instructor_name || null,
-    classIds: [],
-    childStudentIds: [],
+    groupIds: [],
   };
-
-  if (profile.role === "Parent") {
-    const linksResponse = await fetch(
-      `${base}/rest/v1/parent_student_links?parent_user_id=eq.${user.id}&select=student_id`,
-      { headers },
-    );
-    const links = linksResponse.ok ? await linksResponse.json() : [];
-    state.viewerContext.childStudentIds = links.map((link) => link.student_id);
-  }
 
   state.view = "dashboard";
   state.authError = "";
@@ -4033,10 +3877,10 @@ async function handleLoginSubmit(event) {
     const session = await signInWithPassword(config, email, password);
     await hydrateSessionFromToken(session);
     await loadFromSupabase(state.session?.access_token);
-    recomputeInstructorClassIds();
+    recomputeInstructorGroupIds();
     resetIdleTimer();
   } catch (error) {
-    state.authError = error.message || "Could not sign in.";
+    state.authError = error.message || t("errors.generic");
     state.authMode = "signed-out";
   } finally {
     state.authBusy = false;
@@ -4106,7 +3950,7 @@ async function handleIdleTimeout() {
   state.role = "Super Admin";
   state.view = "dashboard";
   state.authMode = "signed-out";
-  state.authError = "You were signed out after 3 minutes of inactivity. Please sign back in.";
+  state.authError = t("auth.idleTimeout");
   render();
 }
 
@@ -4136,12 +3980,12 @@ async function handleForcePasswordSubmit(event) {
   state.authError = "";
 
   if (next.length < 8) {
-    state.authError = "Choose a password with at least 8 characters.";
+    state.authError = t("auth.passwordTooShort");
     render();
     return;
   }
   if (next !== confirmValue) {
-    state.authError = "Passwords do not match.";
+    state.authError = t("auth.passwordMismatch");
     render();
     return;
   }
@@ -4164,13 +4008,12 @@ async function handleForcePasswordSubmit(event) {
     state.authMode = "signed-in";
     resetIdleTimer();
   } catch (error) {
-    state.authError = error.message || "Could not update your password.";
+    state.authError = error.message || t("errors.generic");
   } finally {
     state.authBusy = false;
     render();
   }
 }
-
 window.navigate = navigate;
 window.setSearch = setSearch;
 window.beginLogin = beginLogin;
@@ -4192,21 +4035,20 @@ window.dismissPromoModal = dismissPromoModal;
 window.openPromoForm = openPromoForm;
 window.openModal = openModal;
 window.closeModal = closeModal;
-window.handleAddClass = handleAddClass;
 window.handleAddInstructor = handleAddInstructor;
 window.handleAddStudent = handleAddStudent;
 window.handleAddManager = handleAddManager;
 window.handleAddGroup = handleAddGroup;
 window.handleAddMaterial = handleAddMaterial;
 window.handleAddAssignment = handleAddAssignment;
-window.renderModalGroupOptions = renderModalGroupOptions;
-window.renderAssignmentGroupOptions = renderAssignmentGroupOptions;
 window.supabaseDownloadFile = supabaseDownloadFile;
 window.selectStudent = selectStudent;
-window.setStudentClassFilter = setStudentClassFilter;
+window.setStudentGroupFilter = setStudentGroupFilter;
 window.exportStudentsCsv = exportStudentsCsv;
 window.renderAttendanceRoster = renderAttendanceRoster;
 window.handleTakeAttendance = handleTakeAttendance;
+window.openGroupDetail = openGroupDetail;
+window.backToGroups = backToGroups;
 window.toggleStaffRequestFields = toggleStaffRequestFields;
 window.handleAddStaffRequest = handleAddStaffRequest;
 window.setStaffRequestStatus = setStaffRequestStatus;
@@ -4223,10 +4065,11 @@ window.dismissOpportunitiesNotice = dismissOpportunitiesNotice;
 window.openOpportunityDetail = openOpportunityDetail;
 window.closeOpportunityDetail = closeOpportunityDetail;
 window.toggleTheme = toggleTheme;
+window.setLanguage = setLanguage;
 window.chooseLoginMode = chooseLoginMode;
 window.backToLoginChooser = backToLoginChooser;
 window.handleSaveGrade = handleSaveGrade;
-window.setChatClass = setChatClass;
+window.setChatGroup = setChatGroup;
 window.handleSendMessage = handleSendMessage;
 window.deleteMessage = deleteMessage;
 window.handleChangePassword = handleChangePassword;
@@ -4299,8 +4142,48 @@ function toggleTheme() {
   render();
 }
 
+// ---------------------------------------------------------------------
+// Language / direction. Applied via `lang`/`dir` attributes on <html> so
+// RTL layout (Arabic) kicks in everywhere at once, including the marketing
+// page and every auth screen. Remembered per-browser the same way the
+// theme is; defaults to Arabic (DEFAULT_LANG) for a first-time visitor.
+// ---------------------------------------------------------------------
+
+function applyLang(lang) {
+  document.documentElement.setAttribute("lang", lang);
+  document.documentElement.setAttribute("dir", isRtl(lang) ? "rtl" : "ltr");
+}
+
+function initLang() {
+  let saved = null;
+  try {
+    saved = localStorage.getItem("codenest-lang");
+  } catch {
+    saved = null;
+  }
+  if (!LANGS.includes(saved)) saved = DEFAULT_LANG;
+  setLang(saved);
+  state.lang = saved;
+  applyLang(saved);
+}
+
+function setLanguage(lang) {
+  if (!LANGS.includes(lang)) return;
+  setLang(lang);
+  state.lang = lang;
+  applyLang(lang);
+  try {
+    localStorage.setItem("codenest-lang", lang);
+  } catch {
+    // Private browsing / storage blocked — the switch still works for
+    // the rest of this visit, it just won't be remembered next time.
+  }
+  render();
+}
+
 async function initApp() {
   initTheme();
+  initLang();
   render();
   loadPublicReviews().then(() => {
     if (state.authMode === "marketing") render();
@@ -4319,7 +4202,7 @@ async function initApp() {
 
   await bootstrapAuthSession();
   await loadFromSupabase(state.session?.access_token);
-  recomputeInstructorClassIds();
+  recomputeInstructorGroupIds();
   resetIdleTimer();
   render();
 }

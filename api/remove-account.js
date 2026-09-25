@@ -98,19 +98,19 @@ export default async function handler(req, res) {
   }
 
   if (role === "Instructor") {
-    // Guardrail: don't leave classes pointing at an instructor who no
-    // longer exists. `classes.instructor` is a plain text match, not a
+    // Guardrail: don't leave groups pointing at an instructor who no
+    // longer exists. `groups.instructor` is a plain text match, not a
     // real foreign key, so the database itself wouldn't stop this.
-    const classesResponse = await fetch(
-      `${base}/rest/v1/classes?instructor=eq.${encodeURIComponent(ref)}&select=class_id`,
+    const groupsResponse = await fetch(
+      `${base}/rest/v1/groups?instructor=eq.${encodeURIComponent(ref)}&select=group_id`,
       { headers: serviceHeaders },
     );
-    const classRows = classesResponse.ok ? await classesResponse.json() : [];
-    if (classRows.length > 0) {
+    const groupRows = groupsResponse.ok ? await groupsResponse.json() : [];
+    if (groupRows.length > 0) {
       jsonError(
         res,
         409,
-        `${ref} still has ${classRows.length} class${classRows.length === 1 ? "" : "es"} assigned. Reassign or delete ${classRows.length === 1 ? "that class" : "those classes"} first, then remove ${ref}.`,
+        `${ref} still has ${groupRows.length} group${groupRows.length === 1 ? "" : "s"} assigned. Reassign or delete ${groupRows.length === 1 ? "that group" : "those groups"} first, then remove ${ref}.`,
       );
       return;
     }
@@ -162,10 +162,9 @@ export default async function handler(req, res) {
     }
 
     // Revoke the login, if one was ever issued. Everything else that
-    // points at this student (attendance_records, group_members,
-    // parent_student_links) is a real foreign key with `on delete
-    // cascade`, so deleting the row below cleans those up automatically —
-    // nothing else to do here.
+    // points at this student (attendance_records, grades) is a real
+    // foreign key with `on delete cascade`, so deleting the row below
+    // cleans those up automatically — nothing else to do here.
     const profileResponse = await fetch(
       `${base}/rest/v1/user_profiles?student_id=eq.${encodeURIComponent(ref)}&select=user_id`,
       { headers: serviceHeaders },

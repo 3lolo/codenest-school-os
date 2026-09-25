@@ -70,7 +70,7 @@ export default async function handler(req, res) {
   // 2. Is the caller actually allowed to issue logins? (checked server-side,
   // never trust the client). Managers (Super Admin / School Admin) can issue
   // Instructor and Student logins. Instructors can only issue Student
-  // logins, and only for students in their own classes (checked in step 3b).
+  // logins, and only for students in their own groups (checked in step 3b).
   const callerProfileResponse = await fetch(
     `${base}/rest/v1/user_profiles?user_id=eq.${caller.id}&select=role,instructor_name`,
     { headers: serviceHeaders },
@@ -124,29 +124,29 @@ export default async function handler(req, res) {
   }
 
   // 3b. An instructor may only issue/reset logins for students in one of
-  // their own classes — re-verified here with the service key rather than
+  // their own groups — re-verified here with the service key rather than
   // trusted from the browser.
   if (callerIsInstructor) {
     if (!callerInstructorName) {
       jsonError(res, 403, "Your account is not linked to an instructor record yet. Ask a Manager to fix this.");
       return;
     }
-    const [studentResponse, classesResponse] = await Promise.all([
-      fetch(`${base}/rest/v1/students?student_id=eq.${encodeURIComponent(studentRef)}&select=class_id`, {
+    const [studentResponse, groupsResponse] = await Promise.all([
+      fetch(`${base}/rest/v1/students?student_id=eq.${encodeURIComponent(studentRef)}&select=group_id`, {
         headers: serviceHeaders,
       }),
       fetch(
-        `${base}/rest/v1/classes?instructor=eq.${encodeURIComponent(callerInstructorName)}&select=class_id`,
+        `${base}/rest/v1/groups?instructor=eq.${encodeURIComponent(callerInstructorName)}&select=group_id`,
         { headers: serviceHeaders },
       ),
     ]);
     const studentRows = studentResponse.ok ? await studentResponse.json() : [];
-    const classRows = classesResponse.ok ? await classesResponse.json() : [];
-    const studentClassId = studentRows[0]?.class_id;
-    const ownClassIds = new Set(classRows.map((row) => row.class_id));
+    const groupRows = groupsResponse.ok ? await groupsResponse.json() : [];
+    const studentGroupId = studentRows[0]?.group_id;
+    const ownGroupIds = new Set(groupRows.map((row) => row.group_id));
 
-    if (!studentClassId || !ownClassIds.has(studentClassId)) {
-      jsonError(res, 403, "You can only issue logins for students in your own classes.");
+    if (!studentGroupId || !ownGroupIds.has(studentGroupId)) {
+      jsonError(res, 403, "You can only issue logins for students in your own groups.");
       return;
     }
   }

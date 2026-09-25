@@ -2041,3 +2041,205 @@ code {
   border-color: var(--brand);
   color: #fff;
 }
+
+/* ---------- Language switcher (ar / it / en) ---------- */
+
+.lang-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+  flex: 0 0 auto;
+}
+
+.lang-option {
+  min-height: 28px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.lang-option:hover {
+  background: rgba(31, 122, 114, 0.1);
+  color: var(--ink);
+  transform: none;
+  box-shadow: none;
+}
+
+.lang-option.active {
+  background: var(--brand);
+  color: #fff;
+}
+
+/* On the auth screens the switcher floats in the same fixed corner as the
+   theme toggle (see .auth-theme-toggle), just further from the edge so the
+   two never overlap. */
+.auth-lang-switcher {
+  position: absolute;
+  top: 20px;
+  right: 66px;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+.auth-lang-switcher .lang-option {
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.auth-lang-switcher .lang-option.active {
+  background: #fff;
+  color: var(--brand-dark);
+}
+
+@media (max-width: 520px) {
+  .auth-lang-switcher {
+    top: 12px;
+    right: 12px;
+  }
+
+  .auth-theme-toggle {
+    top: 12px;
+    right: 58px;
+  }
+}
+
+/* ---------- Gallery (previous-experience photos/videos) ---------- */
+
+.m-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.m-gallery-item {
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: var(--soft);
+  aspect-ratio: 4 / 3;
+}
+
+.m-gallery-item img,
+.m-gallery-item video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.m-gallery-empty {
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  padding: 40px 24px;
+  text-align: center;
+  background: var(--soft);
+}
+
+.m-gallery-empty .empty {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+/* ---------- Promo modal title (offer headline above the body copy) ---------- */
+
+.promo-modal-body h3 {
+  margin: 0;
+  font-size: 20px;
+  color: var(--ink);
+}
+
+/* ---------------------------------------------------------------------
+   RTL (Arabic). Grid and flex layouts already mirror automatically once
+   <html dir="rtl"> is set (see applyLang() in app.js) — CSS Grid/Flexbox
+   track order and `justify-self: start/end` are direction-aware by spec.
+   What doesn't flip on its own is anything written with a *physical*
+   left/right property, so those are overridden here rather than rewriting
+   the whole stylesheet in logical properties.
+   --------------------------------------------------------------------- */
+
+[dir="rtl"] th,
+[dir="rtl"] td {
+  text-align: right;
+}
+
+[dir="rtl"] .auth-card label {
+  text-align: right;
+}
+
+[dir="rtl"] .account-chip div {
+  text-align: left;
+}
+
+[dir="rtl"] .nav-item {
+  border-left: 1px solid transparent;
+  border-right: 3px solid transparent;
+}
+
+[dir="rtl"] .nav-item.active {
+  border-left-color: transparent;
+  border-right-color: var(--gold);
+}
+
+[dir="rtl"] .m-age {
+  margin-left: 0;
+  margin-right: 6px;
+}
+
+[dir="rtl"] .m-section h2::after {
+  left: auto;
+  right: 0;
+}
+
+[dir="rtl"] .m-compare-badge {
+  right: auto;
+  left: 20px;
+}
+
+[dir="rtl"] .auth-theme-toggle {
+  right: auto;
+  left: 20px;
+}
+
+[dir="rtl"] .auth-lang-switcher {
+  right: auto;
+  left: 66px;
+}
+
+@media (max-width: 520px) {
+  [dir="rtl"] .auth-lang-switcher {
+    right: auto;
+    left: 12px;
+  }
+
+  [dir="rtl"] .auth-theme-toggle {
+    right: auto;
+    left: 58px;
+  }
+}
+
+[dir="rtl"] .promo-close {
+  right: auto;
+  left: 10px;
+}
+
+[dir="rtl"] .modal-close {
+  right: auto;
+  left: 12px;
+}
+
+[dir="rtl"] .chat-delete {
+  right: auto;
+  left: 6px;
+}
+
+[dir="rtl"] .sample-tag {
+  margin-right: 0;
+  margin-left: 6px;
+}
