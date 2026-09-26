@@ -1,4 +1,4 @@
--- Drops everything created by migrations 0001-0013, so you can re-run
+-- Drops everything created by migrations 0001-0014, so you can re-run
 -- them from a clean slate. Safe to run even if some objects don't exist
 -- yet (everything uses IF EXISTS) — this covers both a database that
 -- already had 0011 applied (groups/grades/messages/etc.) and one that
@@ -10,6 +10,7 @@
 drop table if exists public.reviews cascade;
 drop table if exists public.opportunities cascade;
 drop table if exists public.gallery_items cascade;
+drop table if exists public.submissions cascade;
 drop table if exists public.staff_requests cascade;
 drop table if exists public.messages cascade;
 drop table if exists public.grades cascade;

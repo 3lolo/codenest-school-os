@@ -160,6 +160,11 @@ let materials = [];
 let attendanceRecords = [];
 let staffRequests = [];
 let grades = [];
+// Per-student, per-assignment delivered files — see
+// supabase/migrations/0014_assignment_attachments_and_submissions.sql.
+// Separate from `grades`: this only tracks whether/when a student handed
+// in a file, not their score.
+let submissions = [];
 let chatMessages = [];
 let chatPollTimer = null;
 
@@ -194,7 +199,11 @@ function navigate(view) {
   const leavingChat = state.view === "chat" && view !== "chat";
   state.view = view;
   render();
-  if ((view === "accounts" || view === "instructors") && canManageAccounts()) {
+  // "students" is included here too (not just "accounts"/"instructors") so
+  // a Manager's own account status — and the "Reset login" button on
+  // studentProfile() below — is already loaded the moment they open a
+  // student's own profile, without having to visit Accounts first.
+  if ((view === "accounts" || view === "instructors" || view === "students") && canManageAccounts()) {
     loadAccountsDirectory().then(renderContentOnly);
   }
   if (view === "leads" && canManageAccounts()) {
@@ -464,12 +473,49 @@ function instructorDashboard() {
   `;
 }
 
+// Shared by studentAssignmentsPanel() (the student's own dashboard, below)
+// and groupAssignmentsSection()'s student branch (a specific group's own
+// page) so the "here's one assignment, here's its status, here's the
+// button to open it" row only has one definition.
+function studentAssignmentRow(a, student) {
+  const status = assignmentStatusForStudent(a, student.id);
+  return `
+    <tr>
+      <td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${a.maxGrade} ${t("grades.table.score")}</span></td>
+      <td>${a.due || "—"}</td>
+      <td>${gradeStatusBadge(status)}</td>
+      <td><button onclick="openModal('assignmentDetail', { assignmentId: '${escapeJs(a.id)}' })">${t("assignments.open")}</button></td>
+    </tr>
+  `;
+}
+
+// A student's own view of every assignment in their group, each with a
+// real per-student status and an "Open" button into assignmentDetailModal
+// — replaces the old cross-group assignmentPanel() here, which only ever
+// showed the class-wide submissions/total counters and a status value
+// ("Published") no assignment is ever actually created with.
+function studentAssignmentsPanel(student) {
+  const own = assignments.filter((a) => a.groupId === student.groupId);
+  return `
+    <section class="panel table-panel">
+      <div class="panel-head"><h2>${t("assignments.panelTitle")}</h2><span>${t("assignments.count", { count: own.length })}</span></div>
+      <table>
+        <thead><tr><th>${t("assignments.table.assignment")}</th><th>${t("assignments.table.due")}</th><th>${t("common.status")}</th><th></th></tr></thead>
+        <tbody>
+          ${own.map((a) => studentAssignmentRow(a, student)).join("") || `<tr><td colspan="4" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
+        </tbody>
+      </table>
+    </section>
+  `;
+}
+
 function studentDashboard() {
   // Row-level security limits `people.students` to exactly this student's
   // own record once signed in through Supabase.
   const student = people.students[0];
   if (!student) return emptyState(t("dashboard.studentNotLinked"));
-  const openAssignments = assignments.filter((a) => a.status === "Published").length;
+  const ownAssignments = assignments.filter((a) => a.groupId === student.groupId);
+  const pendingCount = ownAssignments.filter((a) => assignmentStatusForStudent(a, student.id) !== "uploaded").length;
   return `
     <div class="profile-hero">
       <div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div>
@@ -479,9 +525,9 @@ function studentDashboard() {
       ${metric(t("dashboard.metric.progress"), `${student.progress}%`, t("dashboard.metric.keepItUp"), "chart")}
       ${metric(t("dashboard.metric.attendance"), `${student.attendance}%`, t("dashboard.metric.absenceCount", { count: student.absences }), "check")}
       ${metric(t("dashboard.metric.avgGrade"), `${student.avgGrade}%`, t("dashboard.metric.latestGrade"), "clipboard")}
-      ${metric(t("dashboard.metric.openAssignments"), openAssignments, t("dashboard.metric.published"), "folder")}
+      ${metric(t("dashboard.metric.openAssignments"), pendingCount, t("dashboard.metric.pendingWork"), "folder")}
     </div>
-    ${assignmentPanel()}
+    ${studentAssignmentsPanel(student)}
   `;
 }
 
@@ -527,6 +573,7 @@ function students() {
     .join("");
 
   return `
+    ${state.accountsNotice ? accountsNoticeBanner(state.accountsNotice) : ""}
     <div class="toolbar">
       ${canAdd ? `<button onclick="openModal('addStudent')">${t("students.new")}</button>` : ""}
       <select onchange="setStudentGroupFilter(this.value)" aria-label="${t("students.filterByGroup")}">
@@ -598,6 +645,18 @@ function studentProfile(student) {
   const canEdit = canEditStudent(currentViewer(), student);
   const removeKey = `remove-student-${student.id}`;
   const removeBusy = state.accountsBusy === removeKey;
+
+  // Same reset/issue-login action as the Accounts tab's accountRow() (see
+  // resetCredentials/generateCredentials) — surfaced here too so a Manager
+  // (or an Instructor, same as on Accounts) doesn't have to leave a
+  // student's own profile just to reset their password.
+  const canResetLogin = canManageAccounts();
+  const loginKey = `student-${student.id}`;
+  const loginBusy = state.accountsBusy === loginKey;
+  const existingAccount = state.accountsDirectory?.find((row) => row.student_id === student.id);
+  const loginActionLabel = existingAccount ? t("accounts.resetPassword") : t("accounts.generateLogin");
+  const loginHandler = existingAccount ? "resetCredentials" : "generateCredentials";
+
   return `
     <section class="panel profile">
       <div class="profile-hero compact"><div class="avatar">${escapeHtml(student.first[0])}${escapeHtml(student.last[0])}</div><div><h2>${escapeHtml(fullName(student))}</h2><span>${escapeHtml(student.id)} · ${escapeHtml(student.status)}</span></div></div>
@@ -612,6 +671,11 @@ function studentProfile(student) {
       </dl>
       <div class="toolbar">
         ${canEdit ? `<button onclick="openModal('editStudent', { studentId: '${escapeJs(student.id)}' })">${t("common.edit")}</button>` : ""}
+        ${
+          canResetLogin
+            ? `<button onclick="${loginHandler}('${loginKey}', 'Student', '${escapeJs(student.email)}', '${escapeJs(fullName(student))}', '${escapeJs(student.id)}')" ${loginBusy ? "disabled" : ""}>${loginBusy ? t("common.working") : loginActionLabel}</button>`
+            : ""
+        }
         ${canRemove ? `<button onclick="handleRemoveStudent('${escapeJs(student.id)}', '${escapeJs(fullName(student))}')" ${removeBusy ? "disabled" : ""}>${removeBusy ? t("common.removing") : t("students.profile.removeStudent")}</button>` : ""}
       </div>
     </section>
@@ -654,6 +718,33 @@ function groupsForViewer() {
 
 function studentsInGroup(groupId) {
   return people.students.filter((student) => student.groupId === groupId);
+}
+
+function submissionFor(assignmentId, studentId) {
+  return submissions.find((s) => s.assignmentId === assignmentId && s.studentId === studentId);
+}
+
+// The one place that decides whether a given student has "uploaded" their
+// work for an assignment, still has time ("notYet"), or missed the
+// deadline without submitting ("exceeded") — used both by the grading
+// modal (to decide when a score input makes sense) and by the student's
+// own assignment views. An assignment with no due date is never
+// "exceeded" — there's nothing to have missed.
+function assignmentStatusForStudent(assignment, studentId) {
+  if (submissionFor(assignment.id, studentId)) return "uploaded";
+  if (assignment.due) {
+    const due = new Date(`${assignment.due}T23:59:59`);
+    if (!Number.isNaN(due.getTime()) && due.getTime() < Date.now()) return "exceeded";
+  }
+  return "notYet";
+}
+
+function assignmentStatusLabel(status) {
+  return {
+    uploaded: t("assignments.status.uploaded"),
+    exceeded: t("assignments.status.exceeded"),
+    notYet: t("assignments.status.notYet"),
+  }[status];
 }
 
 // ---------------------------------------------------------------------
@@ -861,9 +952,17 @@ function assignmentPanel(list = assignments) {
 
 // A group's own Assignments section (see groupDetailView()) — the
 // group-column from assignmentPanel()'s table is dropped since every row
-// here is already that one group's.
+// here is already that one group's. A Student viewer gets a different
+// last two columns than staff do: their own per-assignment status (see
+// assignmentStatusForStudent()) and an "Open" button into
+// assignmentDetailModal() to view the brief, submit a file, and check
+// their grade — instead of the class-wide completion/status columns,
+// which mean nothing to a single student.
 function groupAssignmentsSection(group, manage) {
   const groupAssignments = assignments.filter((a) => a.groupId === group.id);
+  const isStudentViewer = state.role === "Student";
+  const student = isStudentViewer ? people.students[0] : null;
+
   return `
     <section class="panel table-panel">
       <div class="panel-head">
@@ -871,9 +970,20 @@ function groupAssignmentsSection(group, manage) {
         ${manage ? `<button onclick="openModal('addAssignment', { groupId: '${escapeJs(group.id)}' })">${t("assignments.new")}</button>` : `<span>${t("assignments.count", { count: groupAssignments.length })}</span>`}
       </div>
       <table>
-        <thead><tr><th>${t("assignments.table.assignment")}</th><th>${t("assignments.table.due")}</th><th>${t("assignments.table.completion")}</th><th>${t("assignments.table.status")}</th></tr></thead>
+        <thead><tr>
+          <th>${t("assignments.table.assignment")}</th>
+          <th>${t("assignments.table.due")}</th>
+          ${isStudentViewer ? `<th>${t("common.status")}</th><th></th>` : `<th>${t("assignments.table.completion")}</th><th>${t("assignments.table.status")}</th>`}
+        </tr></thead>
         <tbody>
-          ${groupAssignments.map((a) => `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`}
+          ${
+            groupAssignments
+              .map((a) => {
+                if (isStudentViewer && student) return studentAssignmentRow(a, student);
+                return `<tr><td><strong>${escapeHtml(a.title)}</strong><span>${escapeHtml(a.course)} · ${escapeHtml(a.difficulty || "")} · ${a.maxGrade} pts</span></td><td>${a.due || "—"}</td><td>${a.submissions}/${a.total}</td><td>${badge(a.status)}</td></tr>`;
+              })
+              .join("") || `<tr><td colspan="4" class="empty">${t("grades.noAssignmentsYet")}</td></tr>`
+          }
         </tbody>
       </table>
     </section>
@@ -971,6 +1081,13 @@ function gradeStudentModal(modal) {
   `;
 }
 
+// A score box only makes sense once there's something to grade: the
+// student has uploaded a file, or the deadline has passed without one
+// (see requirement: "if its uploaded or exceed to add the grade, if not
+// yet within the deadline its ok"). A student who's simply not due yet
+// gets a status note instead of an input — unless they already have a
+// grade on record from before this status gate existed, in which case
+// that's still shown and stays editable rather than silently hidden.
 function gradeRosterRows(assignment, roster) {
   if (!roster.length) return `<p class="hint">${t("grades.modal.noRoster")}</p>`;
   return `
@@ -979,16 +1096,32 @@ function gradeRosterRows(assignment, roster) {
       ${roster
         .map((student) => {
           const existing = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
+          const status = assignmentStatusForStudent(assignment, student.id);
+          const canGrade = status !== "notYet" || Boolean(existing);
           return `
             <div class="attendance-row">
-              <span>${escapeHtml(fullName(student))}</span>
-              <input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="${t("grades.table.score")}" />
+              <span>${escapeHtml(fullName(student))} ${gradeStatusBadge(status)}</span>
+              ${
+                canGrade
+                  ? `<input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="${t("grades.table.score")}" />`
+                  : `<span class="muted-pill">${t("assignments.status.notYet")}</span>`
+              }
             </div>
           `;
         })
         .join("")}
     </fieldset>
   `;
+}
+
+// Reuses the same tone classes badge() already relies on (.active =
+// success green, .notify = danger red, .draft = warning amber — see
+// styles.css) rather than inventing a parallel color system, while still
+// keying off the stable English status rather than the localized label
+// badge() would otherwise turn into an unstable CSS class name.
+function gradeStatusBadge(status) {
+  const tone = status === "uploaded" ? "active" : status === "exceeded" ? "notify" : "draft";
+  return `<span class="badge ${tone}">${escapeHtml(assignmentStatusLabel(status))}</span>`;
 }
 
 async function handleSaveGrade(event, assignmentId) {
@@ -1043,6 +1176,44 @@ function chatGroupsForViewer() {
   return group ? [group] : [];
 }
 
+// Just the message bubbles — split out from chatView() so a background
+// poll tick (see startChatPolling below) can refresh only this markup via
+// renderChatThreadOnly() instead of a full renderContentOnly(), which used
+// to blow away and recreate the composer's <input> on every tick and wipe
+// out whatever the person was in the middle of typing.
+function chatThreadHtml(groupMessages, canModerate, viewerName) {
+  return groupMessages.length
+    ? groupMessages
+        .map(
+          (m) => `
+          <div class="chat-message ${m.senderName === viewerName && m.senderRole === state.role ? "chat-message-own" : ""}">
+            <div class="chat-message-meta"><strong>${escapeHtml(m.senderName)}</strong><span>${escapeHtml(roleLabel(m.senderRole))} · ${new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
+            <p>${escapeHtml(m.body)}</p>
+            ${canModerate ? `<button type="button" class="chat-delete" onclick="deleteMessage('${escapeJs(m.id)}')" aria-label="${t("chat.deleteMessage")}">&times;</button>` : ""}
+          </div>
+        `,
+        )
+        .join("")
+    : `<p class="empty">${t("chat.noMessages")}</p>`;
+}
+
+// Re-renders only the #chat-thread element's contents (called on every
+// silent poll tick — see startChatPolling) rather than the whole #content
+// panel, so the chat composer's <input> DOM node — and whatever the person
+// is currently typing into it — is left completely untouched.
+function renderChatThreadOnly() {
+  const threadEl = document.getElementById("chat-thread");
+  if (!threadEl || state.view !== "chat") return;
+  const groupMessages = chatMessages
+    .filter((m) => m.groupId === state.chatGroupId)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const canModerate = ["Super Admin", "School Admin"].includes(state.role);
+  const viewerName = state.profile?.full_name || "";
+  const wasNearBottom = threadEl.scrollTop + threadEl.clientHeight >= threadEl.scrollHeight - 60;
+  threadEl.innerHTML = chatThreadHtml(groupMessages, canModerate, viewerName);
+  if (wasNearBottom) threadEl.scrollTop = threadEl.scrollHeight;
+}
+
 function chatView() {
   const availableGroups = chatGroupsForViewer();
   if (!availableGroups.length) {
@@ -1065,21 +1236,7 @@ function chatView() {
       </div>
       ${state.chatError ? `<p class="notice-row auth-error">${escapeHtml(state.chatError)}</p>` : ""}
       <div class="chat-thread" id="chat-thread">
-        ${
-          groupMessages.length
-            ? groupMessages
-                .map(
-                  (m) => `
-                  <div class="chat-message ${m.senderName === viewerName && m.senderRole === state.role ? "chat-message-own" : ""}">
-                    <div class="chat-message-meta"><strong>${escapeHtml(m.senderName)}</strong><span>${escapeHtml(roleLabel(m.senderRole))} · ${new Date(m.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span></div>
-                    <p>${escapeHtml(m.body)}</p>
-                    ${canModerate ? `<button type="button" class="chat-delete" onclick="deleteMessage('${escapeJs(m.id)}')" aria-label="${t("chat.deleteMessage")}">&times;</button>` : ""}
-                  </div>
-                `,
-                )
-                .join("")
-            : `<p class="empty">${t("chat.noMessages")}</p>`
-        }
+        ${chatThreadHtml(groupMessages, canModerate, viewerName)}
       </div>
       <form class="chat-composer" onsubmit="handleSendMessage(event)">
         <input type="text" name="body" placeholder="${t("chat.placeholder")}" maxlength="3900" required autocomplete="off" />
@@ -1137,7 +1294,7 @@ function startChatPolling() {
   stopChatPolling();
   chatPollTimer = setInterval(() => {
     if (state.view !== "chat" || !state.chatGroupId) return;
-    loadChatMessages(state.chatGroupId, { silent: true }).then(renderContentOnly);
+    loadChatMessages(state.chatGroupId, { silent: true }).then(renderChatThreadOnly);
   }, 4000);
 }
 
@@ -1560,10 +1717,10 @@ async function supabaseDeleteFile(path, bucket = "materials") {
   });
 }
 
-async function supabaseDownloadFile(path, fileName) {
+async function supabaseDownloadFile(path, fileName, bucket = "materials") {
   if (!state.session) return;
   const base = config.supabaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/storage/v1/object/materials/${path}`, {
+  const response = await fetch(`${base}/storage/v1/object/${bucket}/${path}`, {
     headers: {
       apikey: config.supabaseAnonKey,
       Authorization: `Bearer ${state.session.access_token}`,
@@ -1595,7 +1752,7 @@ async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   const failures = [];
-  const TOTAL_TABLES = 9; // must match the number of safeSelect(...) calls below
+  const TOTAL_TABLES = 10; // must match the number of safeSelect(...) calls below
   const safeSelect = (table, select = "*") =>
     supabaseSelect(table, select, token).catch((error) => {
       failures.push({ table, message: error.message || String(error) });
@@ -1613,6 +1770,7 @@ async function loadFromSupabase(token) {
       attendanceRows,
       staffRequestRows,
       gradeRows,
+      submissionRows,
     ] = await Promise.all([
       safeSelect("school_settings"),
       safeSelect("students"),
@@ -1623,6 +1781,7 @@ async function loadFromSupabase(token) {
       safeSelect("attendance_records"),
       safeSelect("staff_requests"),
       safeSelect("grades"),
+      safeSelect("submissions"),
     ]);
 
     const settings = settingsRows ? settingsRows[0] : null;
@@ -1689,6 +1848,8 @@ async function loadFromSupabase(token) {
       total: assignment.total,
       maxGrade: assignment.max_grade,
       difficulty: assignment.difficulty,
+      attachmentPath: assignment.attachment_path,
+      attachmentName: assignment.attachment_name,
     }));
 
     materials = materialRows === null ? materials : materialRows.map((material) => ({
@@ -1734,6 +1895,15 @@ async function loadFromSupabase(token) {
       maxScore: grade.max_score,
       feedback: grade.feedback,
       updatedAt: grade.updated_at,
+    }));
+
+    submissions = submissionRows === null ? submissions : submissionRows.map((submission) => ({
+      id: submission.id,
+      assignmentId: submission.assignment_id,
+      studentId: submission.student_id,
+      filePath: submission.file_path,
+      fileName: submission.file_name,
+      submittedAt: submission.submitted_at,
     }));
 
     // Keeping this in plain, friendly language on purpose — dataSource.label
@@ -1876,6 +2046,8 @@ function modalBody(modal) {
       return addMaterialModal(modal);
     case "addAssignment":
       return addAssignmentModal(modal);
+    case "assignmentDetail":
+      return assignmentDetailModal(modal);
     case "takeAttendance":
       return addAttendanceModal(modal);
     case "gradeStudent":
@@ -2184,6 +2356,8 @@ function addAssignmentModal(modal) {
           <option value="Advanced">${t("assignments.form.difficulty.advanced")}</option>
         </select>
       </label>
+      <label>${t("assignments.form.attachment")}<input type="file" name="attachment" /></label>
+      <p class="hint">${t("assignments.form.attachment.hint")}</p>
       <div class="modal-actions">
         <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.saving") : t("assignments.form.create")}</button>
       </div>
@@ -2944,6 +3118,7 @@ async function handleAddAssignment(event, groupId) {
   const dueDate = form.dueDate.value || null;
   const maxGrade = Number(form.maxGrade.value) || 100;
   const difficulty = form.difficulty.value;
+  const attachment = form.attachment.files[0];
   const group = groups.find((item) => item.id === groupId);
   if (!title || !course || !group) {
     state.modalError = t("assignments.form.missingFields");
@@ -2954,6 +3129,18 @@ async function handleAddAssignment(event, groupId) {
   state.modalError = "";
   render();
   try {
+    // The attachment lives in the same private "materials" bucket used
+    // for a group's other files (see 0014_assignment_attachments_and_
+    // submissions.sql's comment) — anyone who can already see this
+    // group's materials can read it, no new bucket needed.
+    let attachmentPath = null;
+    let attachmentName = null;
+    if (attachment) {
+      const safeName = attachment.name.replace(/[^\w.\-]+/g, "_");
+      attachmentPath = `${groupId}/assignment-attachments/${Date.now()}-${safeName}`;
+      await supabaseUploadFile(attachmentPath, attachment);
+      attachmentName = attachment.name;
+    }
     const total = studentsInGroup(groupId).length;
     await supabaseInsert("assignments", [
       {
@@ -2966,6 +3153,8 @@ async function handleAddAssignment(event, groupId) {
         total,
         max_grade: maxGrade,
         difficulty,
+        attachment_path: attachmentPath,
+        attachment_name: attachmentName,
       },
     ]);
     await refreshAfterWrite();
@@ -2977,6 +3166,93 @@ async function handleAddAssignment(event, groupId) {
     render();
   }
 }
+
+// Opened by a student from their own group's Assignments section (see
+// groupAssignmentsSection()'s "Open" button) — shows the brief, the
+// instructor's attachment if any, this student's own submission status,
+// a form to submit/resubmit a file, and their grade + feedback once one
+// exists. Always scoped to the signed-in student's own record
+// (people.students[0], same convention gradesView()'s student branch and
+// studentDashboard() already use) — nothing here takes a studentId
+// parameter, so there's no way to open another student's assignment.
+function assignmentDetailModal(modal) {
+  const assignment = assignments.find((a) => a.id === modal.assignmentId);
+  const student = people.students[0];
+  if (!assignment || !student) {
+    return `
+      <h2>${t("assignments.panelTitle")}</h2>
+      <p class="hint">${t("grades.modal.notFound")}</p>
+      <div class="modal-actions"><button type="button" onclick="closeModal()">${t("common.close")}</button></div>
+    `;
+  }
+  const status = assignmentStatusForStudent(assignment, student.id);
+  const mySubmission = submissionFor(assignment.id, student.id);
+  const myGrade = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
+
+  return `
+    <h2>${escapeHtml(assignment.title)}</h2>
+    <p class="hint">${escapeHtml(assignment.course)} · ${t("assignments.table.due")}: ${assignment.due || "—"} · ${assignment.maxGrade} ${t("grades.table.score")}</p>
+    ${modalMessages()}
+    <dl>
+      <div><dt>${t("common.status")}</dt><dd>${gradeStatusBadge(status)}</dd></div>
+      ${
+        assignment.attachmentPath
+          ? `<div><dt>${t("assignments.form.attachment")}</dt><dd><button type="button" onclick="supabaseDownloadFile('${escapeJs(assignment.attachmentPath)}', '${escapeJs(assignment.attachmentName || "")}')">${t("common.download")}</button></dd></div>`
+          : ""
+      }
+      ${
+        mySubmission
+          ? `<div><dt>${t("submission.yourFile")}</dt><dd>${escapeHtml(mySubmission.fileName)} · ${new Date(mySubmission.submittedAt).toLocaleString()} <button type="button" onclick="supabaseDownloadFile('${escapeJs(mySubmission.filePath)}', '${escapeJs(mySubmission.fileName)}', 'submissions')">${t("common.download")}</button></dd></div>`
+          : ""
+      }
+      ${
+        myGrade
+          ? `<div><dt>${t("grades.table.score")}</dt><dd>${myGrade.score}/${myGrade.maxScore}${myGrade.feedback ? ` — ${escapeHtml(myGrade.feedback)}` : ""}</dd></div>`
+          : ""
+      }
+    </dl>
+    <form onsubmit="handleSubmitAssignment(event, '${escapeJs(assignment.id)}')">
+      <label>${mySubmission ? t("submission.form.resubmit") : t("submission.form.file")}<input type="file" name="file" required /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.uploading") : mySubmission ? t("submission.form.resubmitSubmit") : t("submission.form.submit")}</button>
+      </div>
+    </form>
+  `;
+}
+
+async function handleSubmitAssignment(event, assignmentId) {
+  event.preventDefault();
+  const form = event.target;
+  const file = form.file.files[0];
+  const student = people.students[0];
+  if (!file || !student) {
+    state.modalError = t("submission.form.missingFile");
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  state.modalNotice = "";
+  render();
+  try {
+    const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+    const path = `${assignmentId}/${student.id}/${Date.now()}-${safeName}`;
+    await supabaseUploadFile(path, file, "submissions");
+    await supabaseUpsert(
+      "submissions",
+      [{ assignment_id: assignmentId, student_id: student.id, file_path: path, file_name: file.name }],
+      "assignment_id,student_id",
+    );
+    await refreshAfterWrite();
+    state.modalNotice = t("submission.form.saved");
+  } catch (error) {
+    state.modalError = error.message || t("submission.form.saveError");
+  } finally {
+    state.modalBusy = false;
+    render();
+  }
+}
+
 function appShell() {
   if (state.authMode === "checking") return authLoadingScreen();
   if (state.authMode === "marketing") return state.opportunityDetail ? opportunityDetailScreen(state.opportunityDetail) : marketingScreen();
@@ -4590,7 +4866,7 @@ async function handleSignOut() {
 // on the public marketing page or the login screen itself.
 // ---------------------------------------------------------------------
 
-const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000;
 let idleTimer = null;
 let idleActivityThrottleAt = 0;
 
@@ -4724,6 +5000,7 @@ window.setAddStudentSearchQuery = setAddStudentSearchQuery;
 window.handleAddExistingStudentToGroup = handleAddExistingStudentToGroup;
 window.handleAddMaterial = handleAddMaterial;
 window.handleAddAssignment = handleAddAssignment;
+window.handleSubmitAssignment = handleSubmitAssignment;
 window.supabaseDownloadFile = supabaseDownloadFile;
 window.selectStudent = selectStudent;
 window.setStudentGroupFilter = setStudentGroupFilter;
