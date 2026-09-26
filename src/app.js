@@ -6,6 +6,7 @@ import {
   canCreateStudentProfiles,
   canEditInstructorProfiles,
   canEditStudent,
+  canManageGallery,
   canManageGroup,
   canManageOpportunities,
   canRemoveAccounts,
@@ -66,6 +67,13 @@ const state = {
   opportunitiesBusy: null,
   opportunitiesNotice: null,
   opportunityDetail: null,
+  // Gallery items have no draft/pending state (unlike opportunities' open/
+  // closed split) — every row is public the instant it's created — so one
+  // shared array powers both the homepage's public Gallery section and the
+  // Manager's own "Gallery" dashboard tab. See loadPublicGalleryItems().
+  publicGalleryItems: [],
+  galleryBusy: null,
+  galleryNotice: null,
   theme: "light",
   lang: DEFAULT_LANG,
   loginMode: null, // "student" | "staff" | null (chooser not yet answered)
@@ -76,6 +84,13 @@ const state = {
   profileBusy: false,
   profileError: "",
   profileNotice: "",
+  // Set by the `beforeinstallprompt` listener near initApp() — only ever
+  // populated once registerDashboardServiceWorker() has run (i.e. once
+  // someone is signed in), so the "Install app" button in the dashboard
+  // topbar (see shell()) only ever appears there, never on the marketing
+  // page. Cleared again once installApp() has shown the native prompt,
+  // since a captured `beforeinstallprompt` event can only be used once.
+  installPromptEvent: null,
 };
 
 const config = window.CODENEST_CONFIG || {};
@@ -104,6 +119,7 @@ const navItems = [
   ["leads", "nav.leads", "message"],
   ["reviews", "nav.reviews", "chart"],
   ["opportunities", "nav.opportunities", "briefcase"],
+  ["gallery", "nav.gallery", "image"],
   ["profile", "nav.profile", "home"],
   ["settings", "nav.settings", "gear"],
 ];
@@ -162,6 +178,7 @@ const icons = {
   key: "⚷",
   folder: "▧",
   briefcase: "▣",
+  image: "▨",
 };
 
 function can(view) {
@@ -188,6 +205,9 @@ function navigate(view) {
   }
   if (view === "opportunities" && canManageOpportunities(state.role)) {
     loadOpportunitiesDirectory().then(renderContentOnly);
+  }
+  if (view === "gallery" && canManageGallery(state.role)) {
+    loadPublicGalleryItems().then(renderContentOnly);
   }
   if (view === "chat") {
     enterChatView();
@@ -263,6 +283,7 @@ function shell() {
         </label>
         <div class="account-chip">
           ${langSwitcherHtml("topbar-lang")}
+          ${state.installPromptEvent ? `<button type="button" class="theme-toggle" onclick="installApp()" aria-label="${t("common.installApp")}" title="${t("common.installApp")}">⇩</button>` : ""}
           <button type="button" class="theme-toggle" onclick="toggleTheme()" aria-label="${t("theme.toggle")}" title="${t("theme.toggle")}">${state.theme === "dark" ? "☀" : "☾"}</button>
           <div>
             <strong>${escapeHtml(state.profile?.full_name || state.session?.user?.email || roleLabel(state.role))}</strong>
@@ -295,6 +316,7 @@ function titleForView() {
     leads: t("leads.title"),
     reviews: t("nav.reviews"),
     opportunities: t("nav.opportunities"),
+    gallery: t("nav.gallery"),
     profile: t("profile.title"),
     settings: t("settings.title"),
   }[state.view];
@@ -316,6 +338,7 @@ function content() {
     leads: leadsView(),
     reviews: reviewsView(),
     opportunities: opportunitiesView(),
+    gallery: galleryView(),
     profile: profileView(),
     settings: settingsView(),
   }[state.view] || dashboard();
@@ -1501,10 +1524,10 @@ async function supabaseUpsert(table, rows, onConflict) {
   return body;
 }
 
-async function supabaseUploadFile(path, file) {
+async function supabaseUploadFile(path, file, bucket = "materials") {
   if (!state.session) throw new Error("Sign in and try again.");
   const base = config.supabaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/storage/v1/object/materials/${path}`, {
+  const response = await fetch(`${base}/storage/v1/object/${bucket}/${path}`, {
     method: "POST",
     headers: {
       apikey: config.supabaseAnonKey,
@@ -1525,10 +1548,10 @@ async function supabaseUploadFile(path, file) {
 // doesn't touch Storage — see handleRemoveGroup()). A failed delete here
 // is swallowed by the caller rather than blocking the group deletion; an
 // orphaned file is a much smaller problem than a group that won't delete.
-async function supabaseDeleteFile(path) {
+async function supabaseDeleteFile(path, bucket = "materials") {
   if (!state.session) return;
   const base = config.supabaseUrl.replace(/\/$/, "");
-  await fetch(`${base}/storage/v1/object/materials/${path}`, {
+  await fetch(`${base}/storage/v1/object/${bucket}/${path}`, {
     method: "DELETE",
     headers: {
       apikey: config.supabaseAnonKey,
@@ -1861,6 +1884,8 @@ function modalBody(modal) {
       return addStaffRequestModal();
     case "addOpportunity":
       return addOpportunityModal();
+    case "addGalleryItem":
+      return addGalleryItemModal();
     default:
       return "";
   }
@@ -3065,38 +3090,49 @@ function forcePasswordScreen() {
 // Starter testimonials shown until real, Manager-approved reviews come in
 // from the "Leave a review" form — no visible "sample" labeling on the
 // live site; swap these for real quotes any time in this file.
+// Placeholder testimonials shown alongside real ones submitted through the
+// review form (see `allReviews` in marketingScreen() — this array is just
+// filler until enough real reviews come in). Written in Egyptian colloquial
+// Arabic on purpose: this school's actual audience, so generic corporate-
+// English copy would read as obviously fake here. Swap these out for real
+// reviews as they accumulate, same as the gallery's "coming soon" note.
 const sampleReviews = [
   {
-    quote: "My son couldn't stop talking about the game he built in class — he's already asking when the next module starts!",
-    name: "Parent of a Junior Coders student",
+    quote: "ابني كان بيكره الكمبيوتر خالص، ودلوقتي بيتحمس للحصة كل أسبوع وعمل أول لعبة بنفسه من غير ما حد يساعده. تسلم إيديكو.",
+    name: "والدة يوسف، طالب في Junior Coders",
   },
   {
-    quote: "I built my own website in the Code Builders track and showed it to my whole class. Best decision my parents made for me this year.",
-    name: "Code Builders student, age 12",
+    quote: "معرفش حاجة في البرمجة أصلاً، ودلوقتي عملت أول موقع ليا وعرضته على زمايلي في المدرسة. المدربين صبورين جدًا وبيشرحوا خطوة خطوة.",
+    name: "مصطفى، طالب في Code Builders، 12 سنة",
   },
   {
-    quote: "ابني بقى يتحمس يروح الحصة كل أسبوع، وعمل أول لعبة له بنفسه — فخورين جدًا فيه.",
-    name: "والد طالب في مسار Junior Coders",
+    quote: "بنتي كانت بتقول ده صعب عليها وحاسة إنها مش هتفهم، ودلوقتي بقت هي اللي بتعلّم أخوها الصغير في البيت. حسّيت إن الفلوس دي اتصرفت صح.",
+    name: "والد مريم، طالبة في Young Developers",
   },
   {
-    quote: "تعلمت البرمجة من الصفر وعملت أول موقع إلكتروني ليا في خلال شهرين بس.",
-    name: "طالبة في مسار Code Builders",
+    quote: "جربنا مراكز كتير قبل كده وملقيناش زي هنا. المتابعة مع الولد أول بأول، وشفنا فرق واضح من أول شهر بس.",
+    name: "والد كريم، طالب في Junior Coders",
   },
   {
-    quote: "The instructors are patient and really get how kids learn. My daughter went from \"I don't get coding\" to teaching her little brother in a few weeks.",
-    name: "Parent of a Young Developers student",
+    quote: "عملت مشروع بايثون بنفسي وعرضته في آخر الترم، ولسه مستنية الموديول الجديد يبدأ إمتى عشان أتعلم أكتر.",
+    name: "طالبة في Code Builders، 13 سنة",
   },
 ];
 
-// A gallery of real photos/videos from previous classes — see req: "add a
-// gallery for previous experience". No real assets have been supplied for
-// this school yet, so this list starts empty and the gallery section
-// below shows a friendly "coming soon" placeholder instead of stock or
-// fabricated photos. To add real ones later, drop the files in
-// src/assets/gallery/ and add entries here, e.g.:
-//   { type: "image", src: "/src/assets/gallery/class-1.jpg", alt: "..." }
-//   { type: "video", src: "/src/assets/gallery/demo-day.mp4", poster: "/src/assets/gallery/demo-day-poster.jpg" }
-const galleryItems = [];
+// The homepage Gallery ("previous experience" photos/videos) is managed by
+// a Manager from the dashboard's own "Gallery" tab (see galleryView()) and
+// stored in Supabase's public `gallery_items` table + `gallery` storage
+// bucket (supabase/migrations/0013_gallery.sql) — it's no longer a
+// hardcoded list here. state.publicGalleryItems is populated by
+// loadPublicGalleryItems() and rendered below via galleryPublicUrl().
+
+// The `gallery` storage bucket is public (public = true), so an object's
+// URL needs no access token — this just builds that stable public path.
+function galleryPublicUrl(path) {
+  if (!path) return "";
+  const base = config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, "") : "";
+  return `${base}/storage/v1/object/public/gallery/${path}`;
+}
 
 const trustStats = [
   { valueKey: "marketing.stat.students", labelKey: "marketing.stat.students", isCount: true },
@@ -3354,12 +3390,12 @@ function marketingScreen() {
         <h2>${t("marketing.gallery.title")}</h2>
         <p class="m-sub">${t("marketing.gallery.sub")}</p>
         ${
-          galleryItems.length
-            ? `<div class="m-gallery-grid">${galleryItems
+          state.publicGalleryItems.length
+            ? `<div class="m-gallery-grid">${state.publicGalleryItems
                 .map((item) =>
                   item.type === "video"
-                    ? `<div class="m-gallery-item reveal"><video controls preload="metadata" ${item.poster ? `poster="${escapeHtml(item.poster)}"` : ""}><source src="${escapeHtml(item.src)}" /></video></div>`
-                    : `<div class="m-gallery-item reveal"><img src="${escapeHtml(item.src)}" alt="${escapeHtml(item.alt || "")}" loading="lazy" /></div>`,
+                    ? `<div class="m-gallery-item reveal"><video controls preload="metadata" ${item.poster_path ? `poster="${escapeHtml(galleryPublicUrl(item.poster_path))}"` : ""}><source src="${escapeHtml(galleryPublicUrl(item.file_path))}" /></video></div>`
+                    : `<div class="m-gallery-item reveal"><img src="${escapeHtml(galleryPublicUrl(item.file_path))}" alt="${escapeHtml(item.caption || "")}" loading="lazy" /></div>`,
                 )
                 .join("")}</div>`
             : `<div class="m-gallery-empty reveal"><p class="empty">${t("marketing.gallery.empty")}</p></div>`
@@ -4096,6 +4132,178 @@ async function removeOpportunity(id, title) {
     renderContentOnly();
   }
 }
+
+// ---------------------------------------------------------------------
+// Gallery: a Manager adds/removes the homepage's "previous experience"
+// photos/videos here. Unlike Opportunities there's no draft/open-closed
+// state — every row is public read the instant it's created (see
+// supabase/migrations/0013_gallery.sql) — so state.publicGalleryItems,
+// loaded by the single unauthenticated loadPublicGalleryItems() below,
+// powers both this management view AND the homepage's public section
+// (see marketingScreen()'s #gallery block).
+// ---------------------------------------------------------------------
+
+function galleryView() {
+  const items = state.publicGalleryItems || [];
+  return `
+    ${state.galleryNotice ? galleryNoticeBanner(state.galleryNotice) : ""}
+    <p class="hint">${t("gallery.hint")}</p>
+    <div class="toolbar"><button onclick="openModal('addGalleryItem')">${t("gallery.add")}</button></div>
+    <section class="panel">
+      <div class="panel-head"><h2>${t("nav.gallery")}</h2><span>${t("gallery.total", { count: items.length })}</span></div>
+      ${
+        items.length
+          ? `<div class="m-gallery-grid">${items.map(galleryManageCard).join("")}</div>`
+          : `<div class="m-gallery-empty"><p class="empty">${t("gallery.none")}</p></div>`
+      }
+    </section>
+  `;
+}
+
+function galleryManageCard(item) {
+  const busy = state.galleryBusy === item.id;
+  return `
+    <div class="gallery-manage-item">
+      ${
+        item.type === "video"
+          ? `<video controls preload="metadata" ${item.poster_path ? `poster="${escapeHtml(galleryPublicUrl(item.poster_path))}"` : ""}><source src="${escapeHtml(galleryPublicUrl(item.file_path))}" /></video>`
+          : `<img src="${escapeHtml(galleryPublicUrl(item.file_path))}" alt="${escapeHtml(item.caption || "")}" loading="lazy" />`
+      }
+      <div class="gallery-manage-item-footer">
+        ${item.caption ? `<span>${escapeHtml(item.caption)}</span>` : ""}
+        <button onclick="removeGalleryItem('${item.id}')" ${busy ? "disabled" : ""}>${busy ? t("common.working") : t("common.remove")}</button>
+      </div>
+    </div>
+  `;
+}
+
+function galleryNoticeBanner(notice) {
+  return `
+    <section class="panel credential-reveal error">
+      <div class="panel-head"><h2>${t("accounts.notice.errorTitle")}</h2><button onclick="dismissGalleryNotice()">${t("common.dismiss")}</button></div>
+      <p>${escapeHtml(notice.message)}</p>
+    </section>
+  `;
+}
+
+function dismissGalleryNotice() {
+  state.galleryNotice = null;
+  renderContentOnly();
+}
+
+function addGalleryItemModal() {
+  return `
+    <h2>${t("gallery.form.title")}</h2>
+    <p class="hint">${t("gallery.form.hint")}</p>
+    ${modalMessages()}
+    <form onsubmit="handleAddGalleryItem(event)">
+      <label>${t("gallery.form.file")}<input type="file" name="file" accept="image/*,video/*" required /></label>
+      <label>${t("gallery.form.poster")}<input type="file" name="poster" accept="image/*" /></label>
+      <label>${t("gallery.form.caption")}<input type="text" name="caption" /></label>
+      <div class="modal-actions">
+        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.working") : t("gallery.form.submit")}</button>
+      </div>
+    </form>
+  `;
+}
+
+// The uploaded file's own MIME type decides "image" vs "video" — simpler
+// than a manual dropdown, and it can never get out of sync with the file
+// actually stored.
+async function handleAddGalleryItem(event) {
+  event.preventDefault();
+  const form = event.target;
+  const file = form.file.files[0];
+  const posterFile = form.poster.files[0];
+  const caption = form.caption.value.trim();
+  if (!file) {
+    state.modalError = t("gallery.form.missingFile");
+    render();
+    return;
+  }
+  state.modalBusy = true;
+  state.modalError = "";
+  render();
+  try {
+    const type = file.type.startsWith("video/") ? "video" : "image";
+    const safeName = file.name.replace(/[^\w.\-]+/g, "_");
+    const filePath = `${Date.now()}-${safeName}`;
+    await supabaseUploadFile(filePath, file, "gallery");
+    let posterPath = null;
+    if (posterFile) {
+      const safePosterName = posterFile.name.replace(/[^\w.\-]+/g, "_");
+      posterPath = `${Date.now()}-poster-${safePosterName}`;
+      await supabaseUploadFile(posterPath, posterFile, "gallery");
+    }
+    await supabaseInsert("gallery_items", [
+      {
+        type,
+        file_path: filePath,
+        poster_path: posterPath,
+        caption: caption || null,
+      },
+    ]);
+    await loadPublicGalleryItems();
+    closeModal();
+    navigate("gallery");
+  } catch (error) {
+    state.modalBusy = false;
+    state.modalError = error.message || t("gallery.form.saveError");
+    render();
+  }
+}
+
+async function removeGalleryItem(id) {
+  if (!state.session) return;
+  if (!window.confirm(t("gallery.confirmRemove"))) return;
+  const item = state.publicGalleryItems.find((g) => g.id === id);
+  state.galleryBusy = id;
+  renderContentOnly();
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(`${base}/rest/v1/gallery_items?id=eq.${id}`, {
+      method: "DELETE",
+      headers: {
+        apikey: config.supabaseAnonKey,
+        Authorization: `Bearer ${state.session.access_token}`,
+        Prefer: "return=minimal",
+      },
+    });
+    if (!response.ok) throw new Error(t("gallery.form.removeError"));
+    if (item) {
+      await supabaseDeleteFile(item.file_path, "gallery").catch(() => {});
+      if (item.poster_path) await supabaseDeleteFile(item.poster_path, "gallery").catch(() => {});
+    }
+    await loadPublicGalleryItems();
+  } catch (error) {
+    state.galleryNotice = { type: "error", message: error.message };
+  } finally {
+    state.galleryBusy = null;
+    renderContentOnly();
+  }
+}
+
+// Anyone, signed in or not, can see every gallery item — this is what
+// powers both the homepage's public Gallery section for a signed-out
+// visitor AND the Manager's own "Gallery" dashboard tab (see galleryView()
+// above) — there's no separate admin-only fetch needed since nothing here
+// is ever private or pending.
+async function loadPublicGalleryItems() {
+  if (!hasSupabaseConfig()) return;
+  try {
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(
+      `${base}/rest/v1/gallery_items?select=id,type,file_path,poster_path,caption,created_at&order=created_at.desc`,
+      {
+        headers: { apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}`, Accept: "application/json" },
+      },
+    );
+    state.publicGalleryItems = response.ok ? await response.json() : [];
+  } catch {
+    state.publicGalleryItems = [];
+  }
+}
+
 function accountRow({ key, role, name, email, refId, account }) {
   const busy = state.accountsBusy === key;
   const status = account
@@ -4304,6 +4512,7 @@ async function loadViewerProfile(user) {
   state.view = "dashboard";
   state.authError = "";
   state.authMode = profile.must_change_password ? "force-password" : "signed-in";
+  registerDashboardServiceWorker();
 }
 
 async function hydrateSessionFromToken(session) {
@@ -4538,7 +4747,11 @@ window.removeOpportunity = removeOpportunity;
 window.dismissOpportunitiesNotice = dismissOpportunitiesNotice;
 window.openOpportunityDetail = openOpportunityDetail;
 window.closeOpportunityDetail = closeOpportunityDetail;
+window.handleAddGalleryItem = handleAddGalleryItem;
+window.removeGalleryItem = removeGalleryItem;
+window.dismissGalleryNotice = dismissGalleryNotice;
 window.toggleTheme = toggleTheme;
+window.installApp = installApp;
 window.setLanguage = setLanguage;
 window.chooseLoginMode = chooseLoginMode;
 window.backToLoginChooser = backToLoginChooser;
@@ -4572,6 +4785,58 @@ window.addEventListener(
   },
   { passive: true },
 );
+
+// ---------------------------------------------------------------------
+// PWA install — dashboard only. The browser only offers to install a site
+// once it has an active service worker + manifest, and registerDashboard-
+// ServiceWorker() (called from loadViewerProfile() once someone is signed
+// in) is the only place that ever registers one — a visitor who only sees
+// the public marketing/login screens never gets a service worker, so this
+// listener simply never fires for them. Registered once, top-level, since
+// `beforeinstallprompt` can arrive at any time and there's no later "did I
+// already have this event" to check for.
+// ---------------------------------------------------------------------
+
+let swRegistered = false;
+
+function registerDashboardServiceWorker() {
+  if (swRegistered || !("serviceWorker" in navigator)) return;
+  swRegistered = true;
+  navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => {
+    // Not fatal — the dashboard works fine without it, it just won't be
+    // installable or keep a cached shell for a flaky connection.
+    swRegistered = false;
+  });
+}
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  state.installPromptEvent = event;
+  if (isAuthenticatedMode()) render();
+});
+
+window.addEventListener("appinstalled", () => {
+  state.installPromptEvent = null;
+  if (isAuthenticatedMode()) render();
+});
+
+// Shows the native install prompt captured above — can only be called
+// once per captured event, so it's cleared either way once answered (see
+// the "Install app" button in shell()'s topbar).
+async function installApp() {
+  const event = state.installPromptEvent;
+  if (!event) return;
+  state.installPromptEvent = null;
+  render();
+  try {
+    await event.prompt();
+    await event.userChoice;
+  } catch {
+    // User dismissed it, or the browser revoked it — either way there's
+    // nothing to recover; they can trigger it again next time the browser
+    // decides to offer it.
+  }
+}
 
 // ---------------------------------------------------------------------
 // Light / dark mode. Applied via a `data-theme` attribute on <html> (see
@@ -4664,6 +4929,9 @@ async function initApp() {
   });
   loadPublicOpportunities().then(() => {
     applyOpportunityHash();
+    if (state.authMode === "marketing") render();
+  });
+  loadPublicGalleryItems().then(() => {
     if (state.authMode === "marketing") render();
   });
 

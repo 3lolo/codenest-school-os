@@ -12,6 +12,8 @@ await mkdir(dist, { recursive: true });
 
 await cp(join(root, "index.html"), join(dist, "index.html"));
 await cp(join(root, "src"), join(dist, "src"), { recursive: true });
+await cp(join(root, "manifest.json"), join(dist, "manifest.json"));
+await cp(join(root, "sw.js"), join(dist, "sw.js"));
 
 const config = `window.CODENEST_CONFIG = ${JSON.stringify(
   {

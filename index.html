@@ -6,6 +6,18 @@
     <meta name="description" content="Hero Tech Academy — coding school portal with Manager, Instructor, and Student logins." />
     <title>Hero Tech Academy</title>
     <link rel="icon" type="image/png" href="./src/assets/logo-icon.png" />
+    <!-- The manifest/theme-color/apple tags below are always present, but
+         nothing makes the browser treat the site as installable until
+         app.js registers ./sw.js — and it only does that once someone is
+         actually signed in (see registerDashboardServiceWorker() in
+         src/app.js), so a marketing-only visitor never gets an install
+         prompt for this. -->
+    <link rel="manifest" href="./manifest.json" />
+    <meta name="theme-color" content="#1f7a72" />
+    <link rel="apple-touch-icon" href="./src/assets/pwa-icon-192.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="HTA Dashboard" />
     <link rel="stylesheet" href="./src/styles.css" />
   </head>
   <body>

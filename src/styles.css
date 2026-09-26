@@ -2448,6 +2448,42 @@ code {
   font-weight: 600;
 }
 
+/* Manager dashboard's own Gallery tab: reuses .m-gallery-grid/-item above
+   for the thumbnail itself, and adds a caption + remove-button footer that
+   the public marketing section doesn't need. */
+.gallery-manage-item {
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  background: var(--soft);
+  display: flex;
+  flex-direction: column;
+}
+
+.gallery-manage-item img,
+.gallery-manage-item video {
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  display: block;
+}
+
+.gallery-manage-item-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.gallery-manage-item-footer span {
+  color: var(--muted);
+  font-size: 0.9em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---------- Promo modal title (offer headline above the body copy) ---------- */
 
 .promo-modal-body h3 {

@@ -20,8 +20,8 @@ export function roleLabel(role) {
 // its own Assignments section (see groupDetailView()'s assignments block
 // in app.js), so there's no more school-wide Assignments tab either.
 export const permissions = {
-  "Super Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "settings", "profile"],
-  "School Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "profile"],
+  "Super Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "gallery", "settings", "profile"],
+  "School Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "gallery", "profile"],
   Instructor: ["dashboard", "students", "groups", "grades", "chat", "staffRequests", "accounts", "profile"],
   Student: ["dashboard", "groups", "grades", "chat", "profile"],
 };
@@ -88,6 +88,14 @@ export function canRemoveAccounts(role) {
 // viewer at all — that's enforced by Supabase RLS (status = 'open' is
 // readable by anyone), not by this permission.
 export function canManageOpportunities(role) {
+  return ["Super Admin", "School Admin"].includes(role);
+}
+
+// The homepage Gallery ("previous experience" photos/videos): only a
+// Manager adds or removes items — every row is public the moment it's
+// created (see supabase/migrations/0013_gallery.sql's "gallery items
+// public read" policy), there's no per-item approval step to gate here.
+export function canManageGallery(role) {
   return ["Super Admin", "School Admin"].includes(role);
 }
 
