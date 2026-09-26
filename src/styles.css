@@ -265,6 +265,15 @@ nav {
   backdrop-filter: blur(10px);
 }
 
+/* Every direct child gets min-width:0 so it can actually shrink to its
+   grid track's width instead of forcing the track — and the whole
+   .topbar, and the page — wider than the viewport. Grid items default to
+   min-width:auto (their content's min-content size), which is exactly
+   the failure mode .account-chip's own comment above describes. */
+.topbar > * {
+  min-width: 0;
+}
+
 h1,
 h2,
 p {
@@ -929,11 +938,22 @@ code {
   margin: 0;
 }
 
+/* flex-wrap here is load-bearing on mobile: the topbar's grid column that
+   holds this chip is "auto" sized (see .topbar below), so a grid item's
+   default min-width:auto makes it respect its content's min-content size
+   — for a non-wrapping flex row that's the SUM of every child's own width
+   (lang switcher + install/theme buttons + name/role + sign-out button),
+   which is wider than a phone screen. Wrapping onto a second line instead
+   of forcing that width is what actually stops the whole page from
+   overflowing sideways and needing a pinch-zoom-out to see the rest. */
 .account-chip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   justify-self: end;
+  min-width: 0;
 }
 
 .account-chip div {
@@ -1119,11 +1139,18 @@ code {
   min-height: 100vh;
 }
 
+/* flex-wrap is a safety net here, same reasoning as .account-chip further
+   down: .m-nav-links already hides below 900px (see that breakpoint), but
+   the remaining items (brand, lang switcher, social icons, sign-in
+   button) are still a non-wrapping row with no shrink room on a narrow
+   phone — wrapping onto a second line beats forcing the page wider than
+   the viewport. */
 .m-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 12px 20px;
   padding: 16px 32px;
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -2151,6 +2178,7 @@ code {
 
 .attendance-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -2166,6 +2194,7 @@ code {
 .attendance-row input {
   width: auto;
   min-width: 120px;
+  flex-shrink: 0;
 }
 
 /* Group chat (see chatView() in app.js). When a viewer can see more than
@@ -2341,6 +2370,63 @@ code {
   background: var(--brand);
   border-color: var(--brand);
   color: #fff;
+}
+
+/* ---------- Code tab (in-browser Python via Pyodide) ---------- */
+
+.code-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.code-editor {
+  width: 100%;
+  min-height: 240px;
+  resize: vertical;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 4;
+  color: var(--ink);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  white-space: pre;
+  overflow: auto;
+}
+
+.code-output-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.code-output-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--soft);
+}
+
+.code-output {
+  margin: 0;
+  min-height: 80px;
+  max-height: 360px;
+  overflow: auto;
+  padding: 12px 14px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  background: var(--panel);
+  color: var(--ink);
 }
 
 /* ---------- Language switcher (ar / it / en) ---------- */

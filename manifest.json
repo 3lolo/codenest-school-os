@@ -1,6 +1,6 @@
 {
-  "name": "Hero Tech Academy — Dashboard",
-  "short_name": "HTA Dashboard",
+  "name": "HeroTech",
+  "short_name": "HeroTech",
   "description": "Manager, Instructor, and Student dashboard for Hero Tech Academy — groups, grades, attendance, chat, and more.",
   "id": "/",
   "start_url": "/",

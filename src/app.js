@@ -84,6 +84,18 @@ const state = {
   profileBusy: false,
   profileError: "",
   profileNotice: "",
+  // The in-browser Python tab (Instructor/Student only — see security.js's
+  // permissions). "idle": Pyodide hasn't been asked to load yet (nothing
+  // has been Run). "loading": the ~10MB runtime is downloading/initializing
+  // for the very first Run click this page load. "ready": it loaded fine at
+  // least once. "error": the CDN script itself failed to load (a Python
+  // exception from the user's own code is NOT this — that's reported inline
+  // in codeOutput/codeError instead, status stays "ready").
+  codeStatus: "idle", // "idle" | "loading" | "ready" | "error"
+  codeError: "",
+  codeSource: 'print("Hello, Hero Tech Academy!")\n',
+  codeOutput: "",
+  codeRunning: false,
   // Set by the `beforeinstallprompt` listener near initApp() — only ever
   // populated once registerDashboardServiceWorker() has run (i.e. once
   // someone is signed in), so the "Install app" button in the dashboard
@@ -113,6 +125,7 @@ const navItems = [
   ["groups", "nav.groups", "layers"],
   ["grades", "nav.grades", "chart"],
   ["chat", "nav.chat", "message"],
+  ["code", "nav.code", "code"],
   ["staffRequests", "nav.staffRequests", "message"],
   ["reports", "nav.reports", "chart"],
   ["accounts", "nav.accounts", "key"],
@@ -167,6 +180,14 @@ let grades = [];
 let submissions = [];
 let chatMessages = [];
 let chatPollTimer = null;
+// The loaded Pyodide (CPython-in-WASM) instance backing the Code tab, and
+// the in-flight load promise while it's still downloading/initializing —
+// module-level, not `state`, because it's a live runtime object (and a
+// pending Promise), not serializable UI state. Loaded lazily on the first
+// "Run" click, then reused for every run after that on this page load. See
+// ensurePyodide()/runPythonCode() further down.
+let pyodideInstance = null;
+let pyodideLoadPromise = null;
 
 const icons = {
   grid: "▦",
@@ -184,6 +205,7 @@ const icons = {
   folder: "▧",
   briefcase: "▣",
   image: "▨",
+  code: "▶",
 };
 
 function can(view) {
@@ -319,6 +341,7 @@ function titleForView() {
     groupDetail: selectedGroup ? escapeHtml(selectedGroup.name) : t("groups.title"),
     grades: isStaff ? t("nav.gradebook") : t("grades.title"),
     chat: t("chat.title"),
+    code: t("nav.code"),
     staffRequests: isManager ? t("requests.title") : t("requests.titleMine"),
     reports: t("reports.title"),
     accounts: state.role === "Instructor" ? t("accounts.title.instructor") : t("accounts.title"),
@@ -341,6 +364,7 @@ function content() {
     groupDetail: groupDetailView(),
     grades: gradesView(),
     chat: chatView(),
+    code: codeView(),
     staffRequests: staffRequestsView(),
     reports: reportsView(),
     accounts: accountsView(),
@@ -1394,6 +1418,122 @@ async function deleteMessage(id) {
     renderContentOnly();
   }
 }
+
+// ---------------------------------------------------------------------
+// Code: an in-browser Python interpreter (Instructor + Student only — see
+// security.js's permissions; deliberately not offered to either Manager
+// role, per the request that added this tab). Runs entirely client-side
+// via Pyodide (CPython compiled to WebAssembly, loaded from a CDN on first
+// use) — there is no backend for this at all, so nothing typed here ever
+// leaves the browser. It runs directly on the main window rather than in a
+// sandboxed iframe: the only bridge Python code gets to JS is an explicit
+// `from js import ...`, the Supabase anon key already sitting in
+// window.CODENEST_CONFIG is a publishable client key (Row Level Security,
+// not key secrecy, is what actually protects data), and a student with
+// browser devtools already has equal or greater access than that bridge
+// would grant — so this isn't a materially new attack surface for what is
+// an internal school tool.
+// ---------------------------------------------------------------------
+
+function codeView() {
+  return `
+    <p class="hint">${t("code.hint")}</p>
+    <section class="panel code-panel">
+      <div class="panel-head">
+        <h2>${t("nav.code")}</h2>
+        <div class="toolbar">
+          <button type="button" onclick="runPythonCode()" ${state.codeRunning ? "disabled" : ""}>${state.codeRunning ? t("code.running") : t("code.run")}</button>
+          <button type="button" onclick="clearCodeOutput()">${t("code.clear")}</button>
+        </div>
+      </div>
+      ${state.codeStatus === "loading" ? `<p class="notice-row m-success">${t("code.loading")}</p>` : ""}
+      ${state.codeStatus === "error" ? `<p class="notice-row auth-error">${escapeHtml(state.codeError)}</p>` : ""}
+      <textarea class="code-editor" spellcheck="false" autocapitalize="off" autocorrect="off" oninput="setCodeSource(this.value)">${escapeHtml(state.codeSource)}</textarea>
+      <div class="code-output-wrap">
+        <div class="code-output-label">${t("code.output")}</div>
+        <pre class="code-output">${state.codeOutput ? escapeHtml(state.codeOutput) : `<span class="hint">${t("code.noOutput")}</span>`}</pre>
+      </div>
+    </section>
+  `;
+}
+
+// Deliberately does NOT call render()/renderContentOnly() on every
+// keystroke — this is the exact bug class the chat composer had (a
+// background re-render replacing the DOM node mid-type and dropping
+// keystrokes). Keeping state.codeSource silently in sync here means any
+// LATER full re-render (e.g. once Run finishes) still shows exactly what
+// was typed, with no data loss, without paying for a re-render — and the
+// cursor-position reset that would come with one — on every character.
+function setCodeSource(value) {
+  state.codeSource = value;
+}
+
+// Lazily loads Pyodide from the CDN the first time it's needed, then
+// reuses the same instance for every later Run this page load. Concurrent
+// calls (e.g. a fast double-click on Run) share the one in-flight load
+// via pyodideLoadPromise rather than injecting the <script> tag twice.
+async function ensurePyodide() {
+  if (pyodideInstance) return pyodideInstance;
+  if (!pyodideLoadPromise) {
+    pyodideLoadPromise = (async () => {
+      if (!window.loadPyodide) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://cdn.jsdelivr.net/pyodide/v314.0.7/full/pyodide.js";
+          script.onload = resolve;
+          script.onerror = () => reject(new Error(t("code.loadError")));
+          document.head.appendChild(script);
+        });
+      }
+      const pyodide = await window.loadPyodide();
+      // batched() hands us complete lines (no trailing "\n"), so we add
+      // our own — this is what makes print() output show up as separate
+      // lines in the <pre> below instead of one run-on line.
+      pyodide.setStdout({ batched: (msg) => { state.codeOutput += `${msg}\n`; } });
+      pyodide.setStderr({ batched: (msg) => { state.codeOutput += `${msg}\n`; } });
+      pyodideInstance = pyodide;
+      return pyodide;
+    })();
+  }
+  return pyodideLoadPromise;
+}
+
+// Output accumulates across multiple Run clicks (like a REPL/console
+// history) rather than clearing each time — more useful when iterating on
+// the same snippet. "Clear output" (clearCodeOutput below) is the manual
+// reset for when that history gets in the way.
+async function runPythonCode() {
+  const code = state.codeSource;
+  if (state.codeOutput) state.codeOutput += "\n";
+  state.codeRunning = true;
+  state.codeError = "";
+  if (!pyodideInstance) state.codeStatus = "loading";
+  renderContentOnly();
+  try {
+    const pyodide = await ensurePyodide();
+    state.codeStatus = "ready";
+    await pyodide.runPythonAsync(code);
+  } catch (error) {
+    // pyodideInstance being set means the RUNTIME loaded fine and this is
+    // a Python-level error (syntax error, exception, etc) — status stays
+    // "ready" and the message goes into the output like a real traceback
+    // would. Only a failure to load Pyodide itself (network down, CDN
+    // blocked) sets codeStatus to "error".
+    state.codeStatus = pyodideInstance ? "ready" : "error";
+    const message = error?.message || String(error);
+    state.codeError = message;
+    state.codeOutput += `${message}\n`;
+  } finally {
+    state.codeRunning = false;
+    renderContentOnly();
+  }
+}
+
+function clearCodeOutput() {
+  state.codeOutput = "";
+  renderContentOnly();
+}
+
 // ---------------------------------------------------------------------
 // Profile: every signed-in role's own account info, plus a voluntary
 // password change any time (not just the forced first-login flow — see
@@ -4800,7 +4940,11 @@ async function hydrateSessionFromToken(session) {
 async function bootstrapAuthSession() {
   const stored = loadStoredSession();
   if (!stored?.access_token) {
-    state.authMode = "marketing";
+    // No session yet: a normal browser tab still gets the public marketing
+    // site, but someone who installed this as a PWA and opens it from their
+    // home screen wants the app, not the homepage — send them straight to
+    // the login chooser instead. See isStandalonePwa() further down.
+    state.authMode = isStandalonePwa() ? "signed-out" : "marketing";
     return;
   }
   try {
@@ -4812,7 +4956,7 @@ async function bootstrapAuthSession() {
     } catch {
       storeSession(null);
       state.session = null;
-      state.authMode = "marketing";
+      state.authMode = isStandalonePwa() ? "signed-out" : "marketing";
     }
   }
 }
@@ -4852,7 +4996,10 @@ async function handleSignOut() {
   state.staffRequestNotice = null;
   state.role = "Super Admin";
   state.view = "dashboard";
-  state.authMode = "marketing";
+  // Same reasoning as bootstrapAuthSession(): inside the installed PWA,
+  // signing out should land back on the login chooser, not the public
+  // marketing site.
+  state.authMode = isStandalonePwa() ? "signed-out" : "marketing";
   await loadFromSupabase();
   render();
 }
@@ -5037,6 +5184,9 @@ window.setChatGroup = setChatGroup;
 window.handleSendMessage = handleSendMessage;
 window.deleteMessage = deleteMessage;
 window.handleChangePassword = handleChangePassword;
+window.setCodeSource = setCodeSource;
+window.runPythonCode = runPythonCode;
+window.clearCodeOutput = clearCodeOutput;
 
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
@@ -5073,6 +5223,23 @@ window.addEventListener(
 // `beforeinstallprompt` can arrive at any time and there's no later "did I
 // already have this event" to check for.
 // ---------------------------------------------------------------------
+
+// True once this page is running inside the installed app window (opened
+// from a home-screen/desktop icon) rather than a normal browser tab.
+// `display-mode: standalone` is what Chrome/Edge/Android set; `navigator
+// .standalone` is the older iOS Safari equivalent for "added to home
+// screen" — checking both covers every platform this app installs on.
+// Used by bootstrapAuthSession()/handleSignOut() to send the installed app
+// straight to the login chooser instead of the public marketing homepage.
+function isStandalonePwa() {
+  try {
+    if (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) return true;
+  } catch {
+    // matchMedia unsupported/blocked in this context — fall through to the
+    // iOS-specific check below rather than throwing.
+  }
+  return Boolean(window.navigator.standalone);
+}
 
 let swRegistered = false;
 

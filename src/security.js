@@ -22,8 +22,8 @@ export function roleLabel(role) {
 export const permissions = {
   "Super Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "gallery", "settings", "profile"],
   "School Admin": ["dashboard", "instructors", "students", "groups", "grades", "chat", "staffRequests", "reports", "accounts", "leads", "reviews", "opportunities", "gallery", "profile"],
-  Instructor: ["dashboard", "students", "groups", "grades", "chat", "staffRequests", "accounts", "profile"],
-  Student: ["dashboard", "groups", "grades", "chat", "profile"],
+  Instructor: ["dashboard", "students", "groups", "grades", "chat", "code", "staffRequests", "accounts", "profile"],
+  Student: ["dashboard", "groups", "grades", "chat", "code", "profile"],
 };
 
 // Manager (Super Admin or School Admin) can issue Manager, Instructor, and
