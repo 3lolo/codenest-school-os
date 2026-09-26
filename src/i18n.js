@@ -49,6 +49,7 @@ const en = {
   "nav.gradebook": "Gradebook",
   "nav.chat": "Chat",
   "nav.code": "Code",
+  "nav.scratch": "Scratch",
   "nav.staffRequests": "Requests",
   "nav.staffRequests.toManagers": "Requests to Managers",
   "nav.reports": "Reports",
@@ -448,6 +449,8 @@ const en = {
   "code.noOutput": "No output yet — click Run.",
   "code.loadError": "Couldn't load the Python environment. Check your connection and try again.",
 
+  "scratch.hint": "Drag blocks together to build a project, just like at scratch.mit.edu — this is the real Scratch editor, running right here. Use its own File menu to save your project to your computer and open it again later.",
+
   "materials.title": "Materials",
   "materials.upload": "Upload materials",
   "materials.uploaded": "Uploaded",
@@ -726,6 +729,7 @@ const ar = {
   "nav.gradebook": "سجل الدرجات",
   "nav.chat": "الدردشة",
   "nav.code": "الكود",
+  "nav.scratch": "سكراتش",
   "nav.staffRequests": "الطلبات",
   "nav.staffRequests.toManagers": "طلبات إلى المدراء",
   "nav.reports": "التقارير",
@@ -1125,6 +1129,8 @@ const ar = {
   "code.noOutput": "لا توجد نتيجة بعد — اضغط تشغيل.",
   "code.loadError": "تعذر تحميل بيئة بايثون. تحقق من اتصالك وحاول مرة أخرى.",
 
+  "scratch.hint": "اسحب المكعبات وضعها معًا لبناء مشروعك، تمامًا مثل scratch.mit.edu — هذا هو محرر Scratch الحقيقي، يعمل هنا مباشرة. استخدم قائمة الملف الخاصة به لحفظ مشروعك على جهازك وفتحه لاحقًا.",
+
   "materials.title": "المواد التعليمية",
   "materials.upload": "رفع مواد",
   "materials.uploaded": "تم الرفع",
@@ -1403,6 +1409,7 @@ const it = {
   "nav.gradebook": "Registro voti",
   "nav.chat": "Chat",
   "nav.code": "Codice",
+  "nav.scratch": "Scratch",
   "nav.staffRequests": "Richieste",
   "nav.staffRequests.toManagers": "Richieste ai Responsabili",
   "nav.reports": "Report",
@@ -1801,6 +1808,8 @@ const it = {
   "code.output": "Risultato",
   "code.noOutput": "Nessun risultato ancora — clicca su Esegui.",
   "code.loadError": "Impossibile caricare l'ambiente Python. Controlla la connessione e riprova.",
+
+  "scratch.hint": "Trascina i blocchi insieme per creare un progetto, proprio come su scratch.mit.edu — questo è il vero editor Scratch, in esecuzione qui. Usa il suo menu File per salvare il progetto sul tuo computer e riaprirlo in seguito.",
 
   "materials.title": "Materiali",
   "materials.upload": "Carica materiali",

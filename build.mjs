@@ -14,6 +14,12 @@ await cp(join(root, "index.html"), join(dist, "index.html"));
 await cp(join(root, "src"), join(dist, "src"), { recursive: true });
 await cp(join(root, "manifest.json"), join(dist, "manifest.json"));
 await cp(join(root, "sw.js"), join(dist, "sw.js"));
+// Self-hosted Scratch 3.0 editor (the real scratchfoundation/scratch-gui,
+// built offline and committed as static output — see scratch/README in
+// that folder for how it was built) — served as-is at /scratch/, embedded
+// via an iframe from the "Scratch" nav tab (see scratchView() in
+// src/app.js). Not part of the SPA build itself, just copied through.
+await cp(join(root, "scratch"), join(dist, "scratch"), { recursive: true });
 
 const config = `window.CODENEST_CONFIG = ${JSON.stringify(
   {

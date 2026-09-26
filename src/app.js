@@ -126,6 +126,7 @@ const navItems = [
   ["grades", "nav.grades", "chart"],
   ["chat", "nav.chat", "message"],
   ["code", "nav.code", "code"],
+  ["scratch", "nav.scratch", "scratch"],
   ["staffRequests", "nav.staffRequests", "message"],
   ["reports", "nav.reports", "chart"],
   ["accounts", "nav.accounts", "key"],
@@ -206,6 +207,7 @@ const icons = {
   briefcase: "▣",
   image: "▨",
   code: "▶",
+  scratch: "❖",
 };
 
 function can(view) {
@@ -342,6 +344,7 @@ function titleForView() {
     grades: isStaff ? t("nav.gradebook") : t("grades.title"),
     chat: t("chat.title"),
     code: t("nav.code"),
+    scratch: t("nav.scratch"),
     staffRequests: isManager ? t("requests.title") : t("requests.titleMine"),
     reports: t("reports.title"),
     accounts: state.role === "Instructor" ? t("accounts.title.instructor") : t("accounts.title"),
@@ -365,6 +368,7 @@ function content() {
     grades: gradesView(),
     chat: chatView(),
     code: codeView(),
+    scratch: scratchView(),
     staffRequests: staffRequestsView(),
     reports: reportsView(),
     accounts: accountsView(),
@@ -1439,18 +1443,21 @@ function codeView() {
   return `
     <p class="hint">${t("code.hint")}</p>
     <section class="panel code-panel">
-      <div class="panel-head">
-        <h2>${t("nav.code")}</h2>
+      <div class="code-panel-head">
+        <h2><span class="code-panel-badge" aria-hidden="true">🐍</span> ${t("nav.code")}</h2>
         <div class="toolbar">
-          <button type="button" onclick="runPythonCode()" ${state.codeRunning ? "disabled" : ""}>${state.codeRunning ? t("code.running") : t("code.run")}</button>
-          <button type="button" onclick="clearCodeOutput()">${t("code.clear")}</button>
+          <button type="button" class="code-run-btn ${state.codeRunning ? "is-running" : ""}" onclick="runPythonCode()" ${state.codeRunning ? "disabled" : ""}>${state.codeRunning ? `⏳ ${t("code.running")}` : `▶ ${t("code.run")}`}</button>
+          <button type="button" class="code-clear-btn" onclick="clearCodeOutput()">✨ ${t("code.clear")}</button>
         </div>
       </div>
       ${state.codeStatus === "loading" ? `<p class="notice-row m-success">${t("code.loading")}</p>` : ""}
       ${state.codeStatus === "error" ? `<p class="notice-row auth-error">${escapeHtml(state.codeError)}</p>` : ""}
       <textarea class="code-editor" spellcheck="false" autocapitalize="off" autocorrect="off" oninput="setCodeSource(this.value)">${escapeHtml(state.codeSource)}</textarea>
       <div class="code-output-wrap">
-        <div class="code-output-label">${t("code.output")}</div>
+        <div class="code-output-label">
+          <span class="code-output-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+          ${t("code.output")}
+        </div>
         <pre class="code-output">${state.codeOutput ? escapeHtml(state.codeOutput) : `<span class="hint">${t("code.noOutput")}</span>`}</pre>
       </div>
     </section>
@@ -1532,6 +1539,30 @@ async function runPythonCode() {
 function clearCodeOutput() {
   state.codeOutput = "";
   renderContentOnly();
+}
+
+// ---------------------------------------------------------------------
+// Scratch: the real, official Scratch 3.0 editor (scratchfoundation/
+// scratch-gui — the same open-source project scratch.mit.edu itself runs),
+// built offline and self-hosted as static files at /scratch/ (see
+// scratch/README.md at the project root for how it was built and how to
+// rebuild it). Embedded here via a same-origin iframe rather than ported
+// into this app's own render loop — it's a large, independent React app
+// with its own state management, and an iframe is what lets it just work
+// unmodified. Same audience as Code (Instructor + Student — see
+// security.js). No backend involved: sprites/blocks/running a project all
+// happen in the student's browser, and saving/loading a project uses the
+// editor's own File menu (a .sb3 file to their computer), same as the
+// offline desktop Scratch app.
+// ---------------------------------------------------------------------
+
+function scratchView() {
+  return `
+    <p class="hint">${t("scratch.hint")}</p>
+    <section class="panel scratch-panel">
+      <iframe class="scratch-frame" src="/scratch/index.html" title="${t("nav.scratch")}" allow="fullscreen"></iframe>
+    </section>
+  `;
 }
 
 // ---------------------------------------------------------------------

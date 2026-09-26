@@ -2372,12 +2372,105 @@ code {
   color: #fff;
 }
 
-/* ---------- Code tab (in-browser Python via Pyodide) ---------- */
+/* ---------- Code tab (in-browser Python via Pyodide) — colorful & playful on purpose ---------- */
 
 .code-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
+  /* Python's own brand blue/yellow, used as a subtle theme accent
+     throughout this tab (header strip, editor gutter, focus glow, Run
+     button) so it reads as "this is the Python tab" at a glance. */
+  --py-blue: #4b8bbe;
+  --py-yellow: #ffd43b;
+}
+
+.code-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  background: linear-gradient(120deg, var(--py-blue), #6aa6d8 55%, var(--py-yellow));
+  box-shadow: var(--shadow-sm);
+}
+
+.code-panel-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #fff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  margin: 0;
+}
+
+.code-panel-badge {
+  display: inline-flex;
+  font-size: 20px;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+}
+
+/* Selectors below are deliberately chained (".code-panel-head .toolbar
+   .code-run-btn" etc, not just ".code-run-btn") to out-specificity the
+   generic ".toolbar button:first-child" rule earlier in this file, which
+   would otherwise win and flatten these back to the plain brand-color
+   button style. */
+.code-panel-head .toolbar .code-run-btn,
+.code-panel-head .toolbar .code-clear-btn {
+  border-radius: 999px;
+  font-weight: 700;
+  border: none;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.code-panel-head .toolbar .code-run-btn {
+  background: linear-gradient(120deg, #3ecf6a, #2fae91);
+  color: #fff;
+  box-shadow: 0 3px 0 #1f8a72;
+}
+
+.code-panel-head .toolbar .code-run-btn:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 0 #1f8a72;
+}
+
+.code-panel-head .toolbar .code-run-btn:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 1px 0 #1f8a72;
+}
+
+.code-panel-head .toolbar .code-run-btn.is-running {
+  background: linear-gradient(120deg, #f2a93c, #f2764a);
+  box-shadow: 0 3px 0 #c9622f;
+  animation: code-run-pulse 1.1s ease-in-out infinite;
+}
+
+.code-panel-head .toolbar .code-clear-btn {
+  background: #fff;
+  color: var(--py-blue);
+  box-shadow: 0 3px 0 var(--line);
+}
+
+.code-panel-head .toolbar .code-clear-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 5px 0 var(--line);
+}
+
+.code-panel-head .toolbar .code-clear-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 0 var(--line);
+}
+
+@keyframes code-run-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.75;
+  }
 }
 
 .code-editor {
@@ -2391,10 +2484,18 @@ code {
   color: var(--ink);
   background: var(--soft);
   border: 1px solid var(--line);
+  border-inline-start: 5px solid var(--py-blue);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
   white-space: pre;
   overflow: auto;
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.code-editor:focus {
+  outline: none;
+  border-inline-start-color: var(--py-yellow);
+  box-shadow: 0 0 0 3px rgba(75, 139, 190, 0.25);
 }
 
 .code-output-wrap {
@@ -2404,14 +2505,40 @@ code {
 }
 
 .code-output-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--muted);
+  color: #d7dde5;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 8px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--soft);
+  background: #20242c;
+}
+
+.code-output-dots {
+  display: inline-flex;
+  gap: 5px;
+}
+
+.code-output-dots span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.code-output-dots span:nth-child(1) {
+  background: #ff5f57;
+}
+
+.code-output-dots span:nth-child(2) {
+  background: #febc2e;
+}
+
+.code-output-dots span:nth-child(3) {
+  background: #28c840;
 }
 
 .code-output {
@@ -2425,8 +2552,40 @@ code {
   line-height: 1.5;
   white-space: pre-wrap;
   word-wrap: break-word;
-  background: var(--panel);
-  color: var(--ink);
+  /* Deliberately a fixed dark "terminal" look regardless of light/dark
+     theme — it's a nod to a real console, and keeps output text readable
+     against a background that isn't fighting the app's own theme colors. */
+  background: #15181e;
+  color: #e6f7ec;
+}
+
+.code-output .hint {
+  color: #8993a4;
+}
+
+/* ---------- Scratch tab (self-hosted Scratch 3.0 editor, iframed) ---------- */
+
+.scratch-panel {
+  /* Near edge-to-edge on purpose: the Scratch editor inside the iframe
+     already has its own full chrome (menu bar, palette, stage) — an extra
+     ring of padding here would just shrink that further, and it wants all
+     the room it can get. */
+  padding: 6px;
+}
+
+.scratch-frame {
+  display: block;
+  width: 100%;
+  /* Scratch's own UI assumes a fairly generous canvas (it's built for a
+     desktop-ish window, same as the real editor) — tall enough that the
+     block palette and stage aren't cramped, but still capped so it never
+     forces the dashboard page itself to grow past a normal viewport. */
+  height: 80vh;
+  min-height: 560px;
+  max-height: 900px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #fff;
 }
 
 /* ---------- Language switcher (ar / it / en) ---------- */
