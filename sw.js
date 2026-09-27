@@ -48,6 +48,46 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Web Push. api/send-notification.js sends a JSON payload
+// ({title, body, url}) as the push message's encrypted data — this is the
+// only place that ever reads it. Never touches Supabase or app state
+// itself; it just asks the OS to show a notification and, on click, wakes
+// or focuses an app window pointed at `url` (falling back to "/").
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = { title: "Hero Tech Academy", body: event.data ? event.data.text() : "" };
+  }
+  const title = data.title || "Hero Tech Academy";
+  const options = {
+    body: data.body || "",
+    icon: "/src/assets/pwa-icon-192.png",
+    badge: "/src/assets/pwa-icon-192.png",
+    data: { url: data.url || "/" },
+    tag: data.tag || undefined,
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) {
+          client.focus();
+          if ("navigate" in client) client.navigate(targetUrl).catch(() => {});
+          return;
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    }),
+  );
+});
+
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 

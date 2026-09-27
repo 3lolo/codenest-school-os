@@ -678,6 +678,12 @@ const en = {
   "profile.confirmPassword": "Confirm new password",
   "profile.updatePassword": "Update password",
   "profile.updated": "Your password has been updated.",
+  "profile.notifications.heading": "Notifications",
+  "profile.notifications.hint": "Get a push notification on this device for the things that matter to you — new groups, materials, assignments, grades, and chat messages.",
+  "profile.notifications.toggle": "Push notifications on this device",
+  "profile.notifications.unsupported": "This browser doesn't support push notifications. On iPhone, add this app to your Home Screen first (Share → Add to Home Screen), then try again from there.",
+  "profile.notifications.denied": "Notifications are blocked for this site in your browser settings. Allow notifications for this site, then try again.",
+  "profile.notifications.error": "Couldn't turn on notifications. Try again in a moment.",
 
   "modal.notFound": "This item couldn't be found — it may have just been removed.",
 
@@ -1358,6 +1364,12 @@ const ar = {
   "profile.confirmPassword": "تأكيد كلمة المرور الجديدة",
   "profile.updatePassword": "تحديث كلمة المرور",
   "profile.updated": "تم تحديث كلمة مرورك.",
+  "profile.notifications.heading": "الإشعارات",
+  "profile.notifications.hint": "احصل على إشعار فوري على هذا الجهاز بكل ما يهمك — مجموعات جديدة، مواد، واجبات، درجات، ورسائل الدردشة.",
+  "profile.notifications.toggle": "الإشعارات الفورية على هذا الجهاز",
+  "profile.notifications.unsupported": "هذا المتصفح لا يدعم الإشعارات الفورية. على الآيفون، أضف التطبيق أولاً إلى الشاشة الرئيسية (مشاركة ← إضافة إلى الشاشة الرئيسية) ثم أعد المحاولة من هناك.",
+  "profile.notifications.denied": "الإشعارات محظورة لهذا الموقع في إعدادات متصفحك. فعّل الإشعارات لهذا الموقع ثم أعد المحاولة.",
+  "profile.notifications.error": "تعذّر تفعيل الإشعارات. حاول مرة أخرى بعد قليل.",
 
   "modal.notFound": "تعذر العثور على هذا العنصر — ربما تم حذفه للتو.",
 
@@ -2038,6 +2050,12 @@ const it = {
   "profile.confirmPassword": "Conferma nuova password",
   "profile.updatePassword": "Aggiorna password",
   "profile.updated": "La tua password è stata aggiornata.",
+  "profile.notifications.heading": "Notifiche",
+  "profile.notifications.hint": "Ricevi una notifica push su questo dispositivo per le cose che contano per te: nuovi gruppi, materiali, compiti, voti e messaggi in chat.",
+  "profile.notifications.toggle": "Notifiche push su questo dispositivo",
+  "profile.notifications.unsupported": "Questo browser non supporta le notifiche push. Su iPhone, aggiungi prima l'app alla schermata Home (Condividi → Aggiungi a Home), poi riprova da lì.",
+  "profile.notifications.denied": "Le notifiche sono bloccate per questo sito nelle impostazioni del browser. Consenti le notifiche per questo sito e riprova.",
+  "profile.notifications.error": "Impossibile attivare le notifiche. Riprova tra poco.",
 
   "modal.notFound": "Impossibile trovare questo elemento — potrebbe essere stato appena rimosso.",
 

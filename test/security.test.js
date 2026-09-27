@@ -211,3 +211,32 @@ test("removal-request insert policy requires the target student to be in the req
   assert.match(sql, /staff_requests\.kind <> 'removal'/);
   assert.match(sql, /class\.instructor = staff_requests\.instructor_name/);
 });
+
+test("push_subscriptions migration scopes every policy to the row's own owner, never a public read/write", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/0015_push_subscriptions.sql", import.meta.url), "utf8");
+  assert.match(sql, /enable row level security/i);
+  assert.match(sql, /auth\.uid\(\) = user_id/);
+  assert.doesNotMatch(sql, /using\s*\(\s*true\s*\)/i);
+  assert.doesNotMatch(sql, /with check\s*\(\s*true\s*\)/i);
+  // A device re-subscribing (refreshed keys) upserts via
+  // on_conflict=endpoint (see supabaseUpsert() in src/app.js), which needs
+  // an explicit update policy, not just insert/select/delete.
+  assert.match(sql, /for update/i);
+});
+
+test("send-notification API re-verifies the caller server-side for every event except the one public one, which re-reads its own row instead of trusting the client", async () => {
+  const source = await readFile(new URL("../api/send-notification.js", import.meta.url), "utf8");
+  // Never trust a role/identity claimed by the browser — same rule as
+  // create-account.js and remove-account.js.
+  assert.match(source, /user_profiles\?user_id=eq\.\$\{callerUser\.id\}/);
+  assert.match(source, /if \(eventHandler\.requiresAuth\)/);
+  // Only review_submitted skips the Bearer-token check...
+  assert.match(source, /review_submitted: \{ requiresAuth: false/);
+  // ...and it's the only resolver that doesn't receive a real caller to
+  // check against; it must instead re-read the reviews table so an
+  // arbitrary unauthenticated POST can't manufacture a notification's text.
+  assert.match(source, /status=eq\.pending&select=name,rating,created_at/);
+  // A Manager can act on any group; an Instructor only one they actually
+  // own — re-derived from the caller's own profile, not the request body.
+  assert.match(source, /group\.instructor === caller\.instructorName/);
+});

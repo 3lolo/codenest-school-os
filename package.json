@@ -8,5 +8,8 @@
     "test": "node --test",
     "start": "python3 -m http.server 4173",
     "preview": "python3 -m http.server 4173 -d dist"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
   }
 }

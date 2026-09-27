@@ -6,6 +6,12 @@ const dist = join(root, "dist");
 
 const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "";
+// Public half of the VAPID keypair used for Web Push (see
+// api/send-notification.js and the "Enable notifications" toggle in
+// profileView() in src/app.js) — safe to ship to the client, same as the
+// Supabase anon key above. The private half never leaves the server; it's
+// read directly from VAPID_PRIVATE_KEY by api/send-notification.js.
+const vapidPublicKey = process.env.VAPID_PUBLIC_KEY || "";
 
 await rm(dist, { force: true, recursive: true });
 await mkdir(dist, { recursive: true });
@@ -25,6 +31,7 @@ const config = `window.CODENEST_CONFIG = ${JSON.stringify(
   {
     supabaseUrl,
     supabaseAnonKey,
+    vapidPublicKey,
   },
   null,
   2,

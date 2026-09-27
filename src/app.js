@@ -84,6 +84,12 @@ const state = {
   profileBusy: false,
   profileError: "",
   profileNotice: "",
+  // Web Push opt-in (see profileView()'s "Enable notifications" toggle and
+  // refreshPushSubscriptionState() further down). null = not checked yet
+  // (profileView() shows a neutral state rather than assuming "off").
+  pushSubscribed: null,
+  pushBusy: false,
+  pushError: "",
   // The in-browser Python tab (Instructor/Student only — see security.js's
   // permissions). "idle": Pyodide hasn't been asked to load yet (nothing
   // has been Run). "loading": the ~10MB runtime is downloading/initializing
@@ -1179,6 +1185,18 @@ async function handleSaveGrade(event, assignmentId) {
     await refreshAfterWrite();
     closeModal();
     navigate("grades");
+    for (const row of rows) {
+      try {
+        await notifyEvent("grade_added", {
+          studentRef: row.student_id,
+          assignmentTitle: assignment?.title || "",
+          score: row.score,
+          maxScore: row.max_score,
+        });
+      } catch {
+        // notification is best-effort — the grade itself already saved
+      }
+    }
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("grades.form.saveError");
@@ -1394,6 +1412,11 @@ async function handleSendMessage(event) {
     ]);
     form.reset();
     await loadChatMessages(groupId);
+    try {
+      await notifyEvent("chat_message", { groupId, preview: body });
+    } catch {
+      // notification is best-effort — the message itself already sent
+    }
   } catch (error) {
     state.chatError = error.message || t("chat.couldNotSend");
   } finally {
@@ -1589,6 +1612,22 @@ function profileView() {
         <div><dt>${t("profile.role")}</dt><dd>${escapeHtml(roleLabel(state.role))}</dd></div>
         ${student ? `<div><dt>${t("profile.group")}</dt><dd>${escapeHtml(groupName(student.groupId))}</dd></div>` : ""}
       </dl>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>${t("profile.notifications.heading")}</h2></div>
+      <p class="hint">${t("profile.notifications.hint")}</p>
+      ${state.pushError ? `<p class="notice-row auth-error">${escapeHtml(state.pushError)}</p>` : ""}
+      ${
+        !pushSupported()
+          ? `<p class="hint">${t("profile.notifications.unsupported")}</p>`
+          : `
+        <label class="switch">
+          <span>${t("profile.notifications.toggle")}</span>
+          <input type="checkbox" ${state.pushSubscribed ? "checked" : ""} ${state.pushBusy || state.pushSubscribed === null ? "disabled" : ""} onchange="${state.pushSubscribed ? "disableNotifications()" : "enableNotifications()"}" />
+          <span class="switch-track"></span>
+        </label>
+      `
+      }
     </section>
     <section class="panel">
       <div class="panel-head"><h2>${t("profile.changePassword")}</h2></div>
@@ -1905,6 +1944,153 @@ async function supabaseDownloadFile(path, fileName, bucket = "materials") {
   link.download = fileName || "material";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// ---------------------------------------------------------------------
+// Web Push notifications. See supabase/migrations/0015_push_subscriptions.sql
+// and api/send-notification.js — this is the client half: opting in/out
+// from profileView(), and a fire-and-forget helper every mutation handler
+// below calls after its own write succeeds. A notification is always a
+// side effect of something that already happened; if it fails (no VAPID
+// keys configured yet, offline, browser doesn't support push, nobody
+// subscribed), the real action it's reporting on has already gone through,
+// so every call site below wraps this in a try/catch and never lets a
+// notification failure surface as an error to the person who just, say,
+// saved a grade.
+// ---------------------------------------------------------------------
+
+function pushSupported() {
+  return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window && Boolean(config.vapidPublicKey);
+}
+
+// PushManager wants the VAPID public key as a raw Uint8Array, not the
+// base64url string everything else here hands around.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+}
+
+// Reflects whatever this browser is actually subscribed with into
+// state.pushSubscribed, so the Profile toggle shows the real state on
+// load rather than assuming "off". Silent no-op if push isn't supported
+// or no service worker is registered yet.
+async function refreshPushSubscriptionState() {
+  if (!pushSupported()) {
+    state.pushSubscribed = false;
+    return;
+  }
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    state.pushSubscribed = Boolean(subscription);
+  } catch {
+    state.pushSubscribed = false;
+  }
+}
+
+async function enableNotifications() {
+  if (!pushSupported()) {
+    state.pushError = t("profile.notifications.unsupported");
+    renderContentOnly();
+    return;
+  }
+  state.pushBusy = true;
+  state.pushError = "";
+  renderContentOnly();
+  try {
+    if (Notification.permission === "denied") {
+      throw new Error(t("profile.notifications.denied"));
+    }
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      throw new Error(t("profile.notifications.denied"));
+    }
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(config.vapidPublicKey),
+      });
+    }
+    const json = subscription.toJSON();
+    await supabaseUpsert(
+      "push_subscriptions",
+      [
+        {
+          user_id: state.session.user.id,
+          endpoint: json.endpoint,
+          p256dh: json.keys?.p256dh,
+          auth_key: json.keys?.auth,
+          user_agent: navigator.userAgent,
+        },
+      ],
+      "endpoint",
+    );
+    state.pushSubscribed = true;
+  } catch (error) {
+    state.pushError = error.message || t("profile.notifications.error");
+  } finally {
+    state.pushBusy = false;
+    renderContentOnly();
+  }
+}
+
+async function disableNotifications() {
+  state.pushBusy = true;
+  state.pushError = "";
+  renderContentOnly();
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      const endpoint = subscription.endpoint;
+      await subscription.unsubscribe();
+      const base = config.supabaseUrl.replace(/\/$/, "");
+      await fetch(`${base}/rest/v1/push_subscriptions?endpoint=eq.${encodeURIComponent(endpoint)}`, {
+        method: "DELETE",
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${state.session.access_token}`,
+        },
+      });
+    }
+    state.pushSubscribed = false;
+  } catch (error) {
+    state.pushError = error.message || t("profile.notifications.error");
+  } finally {
+    state.pushBusy = false;
+    renderContentOnly();
+  }
+}
+
+// Fire-and-forget: tells api/send-notification.js something happened so it
+// can push whoever needs to know. Every call site awaits this (so a slow
+// network doesn't reorder it after the next action) but always inside its
+// own try/catch — see the callers below — so a notification failure is
+// never allowed to look like the actual save failed.
+async function notifyEvent(eventType, payload) {
+  if (!state.session) return;
+  await fetch("/api/send-notification", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+    body: JSON.stringify({ eventType, ...payload }),
+  });
+}
+
+// The one event with no signed-in caller — see api/send-notification.js's
+// comment on resolveReviewSubmitted for why this is safe unauthenticated.
+async function notifyPublicEvent(eventType, payload) {
+  await fetch("/api/send-notification", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ eventType, ...payload }),
+  });
 }
 
 function nextRefId(prefix, existingIds) {
@@ -2431,6 +2617,11 @@ async function handleAddExistingStudentToGroup(studentId, groupId) {
     await refreshAfterWrite();
     closeModal();
     openGroupDetail(groupId);
+    try {
+      await notifyEvent("group_assigned", { studentRef: studentId });
+    } catch {
+      // notification is best-effort — the assignment itself already saved
+    }
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("groups.addExisting.saveError");
@@ -2720,7 +2911,7 @@ async function handleAddStaffRequest(event) {
   state.modalError = "";
   render();
   try {
-    await supabaseInsert("staff_requests", [
+    const inserted = await supabaseInsert("staff_requests", [
       {
         instructor_name: instructorName,
         kind,
@@ -2735,6 +2926,14 @@ async function handleAddStaffRequest(event) {
     await refreshAfterWrite();
     closeModal();
     navigate("staffRequests");
+    const requestId = inserted?.[0]?.id;
+    if (requestId) {
+      try {
+        await notifyEvent("staff_request_submitted", { requestId });
+      } catch {
+        // notification is best-effort — the request itself already saved
+      }
+    }
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("requests.form.saveError");
@@ -2813,6 +3012,11 @@ async function setStaffRequestStatus(id, status) {
       body: JSON.stringify({ status }),
     });
     await refreshAfterWrite();
+    try {
+      await notifyEvent("request_status_changed", { requestId: id });
+    } catch {
+      // notification is best-effort — the status change itself already saved
+    }
   } finally {
     state.staffRequestBusy = null;
     renderContentOnly();
@@ -3274,6 +3478,11 @@ async function handleAddMaterial(event, groupId) {
     await refreshAfterWrite();
     closeModal();
     openGroupDetail(groupId);
+    try {
+      await notifyEvent("material_added", { groupId, title });
+    } catch {
+      // notification is best-effort — the material itself already saved
+    }
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("materials.form.saveError");
@@ -3331,6 +3540,11 @@ async function handleAddAssignment(event, groupId) {
     await refreshAfterWrite();
     closeModal();
     openGroupDetail(groupId);
+    try {
+      await notifyEvent("assignment_added", { groupId, title, dueDate });
+    } catch {
+      // notification is best-effort — the assignment itself already saved
+    }
   } catch (error) {
     state.modalBusy = false;
     state.modalError = error.message || t("assignments.form.saveError");
@@ -4112,6 +4326,14 @@ async function handleReviewSubmit(event) {
 
   try {
     if (hasSupabaseConfig()) {
+      // Supplied here (rather than left to the column's own default)
+      // purely so this signed-out form knows the new row's id afterward —
+      // the "reviews public read approved" policy in
+      // supabase/migrations/0005_reviews.sql only lets anyone read back
+      // *approved* rows, so a brand-new 'pending' row can't be read back
+      // via Prefer: return=representation the way an authenticated insert
+      // elsewhere in this file would.
+      const reviewId = crypto.randomUUID();
       const base = config.supabaseUrl.replace(/\/$/, "");
       const response = await fetch(`${base}/rest/v1/reviews`, {
         method: "POST",
@@ -4121,9 +4343,14 @@ async function handleReviewSubmit(event) {
           "Content-Type": "application/json",
           Prefer: "return=minimal",
         },
-        body: JSON.stringify([{ name, role_or_school: roleOrSchool || null, quote, rating }]),
+        body: JSON.stringify([{ id: reviewId, name, role_or_school: roleOrSchool || null, quote, rating }]),
       });
       if (!response.ok) throw new Error(t("marketing.reviews.error"));
+      try {
+        await notifyPublicEvent("review_submitted", { reviewId });
+      } catch {
+        // notification is best-effort — the review itself already saved
+      }
     } else {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
@@ -4960,6 +5187,12 @@ async function loadViewerProfile(user) {
   state.authError = "";
   state.authMode = profile.must_change_password ? "force-password" : "signed-in";
   registerDashboardServiceWorker();
+  // Fire-and-forget: reflects this browser's actual push subscription state
+  // once the service worker is ready, then re-renders the Profile toggle if
+  // it's already on screen. Never blocks sign-in on this.
+  refreshPushSubscriptionState().then(() => {
+    if (state.view === "profile") renderContentOnly();
+  });
 }
 
 async function hydrateSessionFromToken(session) {
@@ -5215,6 +5448,8 @@ window.setChatGroup = setChatGroup;
 window.handleSendMessage = handleSendMessage;
 window.deleteMessage = deleteMessage;
 window.handleChangePassword = handleChangePassword;
+window.enableNotifications = enableNotifications;
+window.disableNotifications = disableNotifications;
 window.setCodeSource = setCodeSource;
 window.runPythonCode = runPythonCode;
 window.clearCodeOutput = clearCodeOutput;
