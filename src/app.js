@@ -1560,7 +1560,7 @@ function scratchView() {
   return `
     <p class="hint">${t("scratch.hint")}</p>
     <section class="panel scratch-panel">
-      <iframe class="scratch-frame" src="/scratch/index.html" title="${t("nav.scratch")}" allow="fullscreen"></iframe>
+      <iframe class="scratch-frame" src="/scratch/" title="${t("nav.scratch")}" allow="fullscreen"></iframe>
     </section>
   `;
 }
