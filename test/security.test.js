@@ -240,3 +240,9 @@ test("send-notification API re-verifies the caller server-side for every event e
   // own — re-derived from the caller's own profile, not the request body.
   assert.match(source, /group\.instructor === caller\.instructorName/);
 });
+
+test("students insert policy lets an instructor add a student to their own group, not just a Manager", async () => {
+  const sql = await readFile(new URL("../supabase/migrations/0016_students_insert_own_instructor.sql", import.meta.url), "utf8");
+  assert.match(sql, /for insert/i);
+  assert.match(sql, /instructor_owns_group\(students\.group_id\)/);
+});
