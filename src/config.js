@@ -1,4 +1,4 @@
-window.CODENEST_CONFIG = {
+window.HERO_CONFIG = {
   supabaseUrl: "",
   supabaseAnonKey: "",
 };

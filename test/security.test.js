@@ -283,3 +283,40 @@ test("R2 helper never lets an unsigned request through and supports the inline/a
   assert.match(source, /signQuery: true/);
   assert.match(source, /response-content-disposition/);
 });
+
+test("assignment_reopens migration lets only staff reopen a student's deadline, never the student themselves, and the submissions write policy now checks it", async () => {
+  const sql = await readFile(
+    new URL("../supabase/migrations/0017_assignment_deadline_and_reopen.sql", import.meta.url),
+    "utf8",
+  );
+  // Reopening (granting a late-submission exception) is staff-only.
+  assert.match(sql, /"assignment reopens staff write"/);
+  assert.match(sql, /public\.is_admin\(\) or public\.instructor_owns_group\(a\.group_id\)/);
+  // The re-created submissions write policy actually gates the student
+  // branch on the deadline/reopen check, not just on group membership.
+  assert.match(sql, /a\.due_date is null\s*\n\s*or current_date <= a\.due_date/);
+  assert.match(sql, /exists \(\s*\n\s*select 1 from public\.assignment_reopens r/);
+});
+
+test("write failures never leak raw Postgres/RLS text or table names to the UI — every non-409 path goes through friendlyWriteErrorMessage", async () => {
+  const source = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  assert.match(source, /function friendlyWriteErrorMessage\(response, body\)/);
+  assert.match(source, /row-level security\|permission denied/);
+  // The old table-name-in-error-message fallbacks are gone.
+  assert.doesNotMatch(source, /Could not save to \$\{table\}/);
+  assert.doesNotMatch(source, /No matching \$\{table\} row was updated/);
+  // supabaseInsert/Update/Upsert all route their non-409 failure through
+  // the shared helper instead of throwing body.message/body.hint directly.
+  const nonDuplicateThrows = [...source.matchAll(/throw new Error\(friendlyWriteErrorMessage\(response, body\)\)/g)];
+  assert.ok(nonDuplicateThrows.length >= 3, "expected supabaseInsert/Update/Upsert to all use friendlyWriteErrorMessage");
+});
+
+test("the client config global no longer names the internal project codename, and the storage upload error path never surfaces the raw Supabase response body", async () => {
+  const appSource = await readFile(new URL("../src/app.js", import.meta.url), "utf8");
+  const buildSource = await readFile(new URL("../build.mjs", import.meta.url), "utf8");
+  assert.match(appSource, /window\.HERO_CONFIG/);
+  assert.doesNotMatch(appSource, /CODENEST_CONFIG/);
+  assert.match(buildSource, /window\.HERO_CONFIG/);
+  assert.doesNotMatch(buildSource, /CODENEST_CONFIG/);
+  assert.doesNotMatch(appSource, /const detail = await response\.text\(\)/);
+});

@@ -111,7 +111,7 @@ const state = {
   installPromptEvent: null,
 };
 
-const config = window.CODENEST_CONFIG || {};
+const config = window.HERO_CONFIG || {};
 const dataSource = {
   label: "Connecting…",
   status: "Loading your school's data…",
@@ -185,6 +185,11 @@ let grades = [];
 // Separate from `grades`: this only tracks whether/when a student handed
 // in a file, not their score.
 let submissions = [];
+// Per-(assignment, student) deadline overrides an instructor/Manager grants
+// so one specific student can submit or resubmit past the assignment's
+// due_date -- see supabase/migrations/0017_assignment_deadline_and_reopen.sql.
+// A student can never write here themselves (RLS), only read their own row.
+let assignmentReopens = [];
 let chatMessages = [];
 let chatPollTimer = null;
 // The loaded Pyodide (CPython-in-WASM) instance backing the Code tab, and
@@ -758,6 +763,29 @@ function submissionFor(assignmentId, studentId) {
   return submissions.find((s) => s.assignmentId === assignmentId && s.studentId === studentId);
 }
 
+// True once an assignment's due date has passed, regardless of whether the
+// student already submitted — used to block both a first-time late submit
+// and a late resubmit, not just to label a status badge.
+function assignmentDeadlinePassed(assignment) {
+  if (!assignment.due) return false;
+  const due = new Date(`${assignment.due}T23:59:59`);
+  return !Number.isNaN(due.getTime()) && due.getTime() < Date.now();
+}
+
+// Whether an instructor/Manager has lifted the deadline for this one
+// student on this one assignment — see
+// supabase/migrations/0017_assignment_deadline_and_reopen.sql.
+function isReopenedFor(assignmentId, studentId) {
+  return assignmentReopens.some((r) => r.assignmentId === assignmentId && r.studentId === studentId);
+}
+
+// Whether this student is currently allowed to submit or resubmit this
+// assignment: no deadline set, the deadline hasn't passed yet, or an
+// instructor/Manager reopened it for them specifically.
+function canSubmitAssignment(assignment, studentId) {
+  return !assignmentDeadlinePassed(assignment) || isReopenedFor(assignment.id, studentId);
+}
+
 // The one place that decides whether a given student has "uploaded" their
 // work for an assignment, still has time ("notYet"), or missed the
 // deadline without submitting ("exceeded") — used both by the grading
@@ -766,10 +794,7 @@ function submissionFor(assignmentId, studentId) {
 // "exceeded" — there's nothing to have missed.
 function assignmentStatusForStudent(assignment, studentId) {
   if (submissionFor(assignment.id, studentId)) return "uploaded";
-  if (assignment.due) {
-    const due = new Date(`${assignment.due}T23:59:59`);
-    if (!Number.isNaN(due.getTime()) && due.getTime() < Date.now()) return "exceeded";
-  }
+  if (assignmentDeadlinePassed(assignment)) return "exceeded";
   return "notYet";
 }
 
@@ -1124,6 +1149,7 @@ function gradeStudentModal(modal) {
 // that's still shown and stays editable rather than silently hidden.
 function gradeRosterRows(assignment, roster) {
   if (!roster.length) return `<p class="hint">${t("grades.modal.noRoster")}</p>`;
+  const deadlinePassed = assignmentDeadlinePassed(assignment);
   return `
     <fieldset class="modal-checklist">
       <legend>${t("grades.modal.legend")}</legend>
@@ -1133,15 +1159,29 @@ function gradeRosterRows(assignment, roster) {
           const status = assignmentStatusForStudent(assignment, student.id);
           const canGrade = status !== "notYet" || Boolean(existing);
           // A grader could never actually see what a student turned in
-          // before — only this status badge. Show a "View" link straight
-          // to the delivered file whenever one exists, so grading doesn't
-          // mean scoring blind.
+          // before — only this status badge. Show View + Download links
+          // straight to the delivered file whenever one exists, so
+          // grading doesn't mean scoring blind.
           const submission = submissionFor(assignment.id, student.id);
+          // Once the deadline has passed, the student can no longer
+          // submit/resubmit on their own (see
+          // supabase/migrations/0017_assignment_deadline_and_reopen.sql) —
+          // give the instructor/Manager a way to lift that for just this
+          // student, and to close it again afterward.
+          const reopened = isReopenedFor(assignment.id, student.id);
           return `
             <div class="attendance-row">
               <span>${escapeHtml(fullName(student))} ${gradeStatusBadge(status)}${
+                reopened ? ` <span class="badge active">${t("submission.reopen.badge")}</span>` : ""
+              }${
                 submission
-                  ? ` <button type="button" class="link-button" onclick="openStorageFile('submissions', '${escapeJs(submission.filePath)}', '${escapeJs(submission.fileName)}', 'view')">${t("common.view")}</button>`
+                  ? ` <button type="button" class="link-button" onclick="openStorageFile('submissions', '${escapeJs(submission.filePath)}', '${escapeJs(submission.fileName)}', 'view')">${t("common.view")}</button> <button type="button" class="link-button" onclick="openStorageFile('submissions', '${escapeJs(submission.filePath)}', '${escapeJs(submission.fileName)}', 'download')">${t("common.download")}</button>`
+                  : ""
+              }${
+                deadlinePassed
+                  ? reopened
+                    ? ` <button type="button" class="link-button" onclick="handleCloseReopen('${escapeJs(assignment.id)}', '${escapeJs(student.id)}')">${t("submission.reopen.close")}</button>`
+                    : ` <button type="button" class="link-button" onclick="handleReopenSubmission('${escapeJs(assignment.id)}', '${escapeJs(student.id)}')">${t("submission.reopen.reopen")}</button>`
                   : ""
               }</span>
               ${
@@ -1155,6 +1195,50 @@ function gradeRosterRows(assignment, roster) {
         .join("")}
     </fieldset>
   `;
+}
+
+// Grants (or revokes) one student's ability to submit/resubmit this
+// assignment past its deadline — enforced server-side in RLS (see
+// 0017_assignment_deadline_and_reopen.sql), not just hidden client-side,
+// so this is the only way a late submission becomes possible again.
+async function handleReopenSubmission(assignmentId, studentId) {
+  state.modalError = "";
+  try {
+    await supabaseUpsert(
+      "assignment_reopens",
+      [{ assignment_id: assignmentId, student_id: studentId }],
+      "assignment_id,student_id",
+    );
+    await refreshAfterWrite();
+  } catch (error) {
+    state.modalError = error.message || t("submission.reopen.error");
+  } finally {
+    render();
+  }
+}
+
+async function handleCloseReopen(assignmentId, studentId) {
+  state.modalError = "";
+  try {
+    if (!state.session) throw new Error(t("submission.reopen.error"));
+    const base = config.supabaseUrl.replace(/\/$/, "");
+    const response = await fetch(
+      `${base}/rest/v1/assignment_reopens?assignment_id=eq.${encodeURIComponent(assignmentId)}&student_id=eq.${encodeURIComponent(studentId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          apikey: config.supabaseAnonKey,
+          Authorization: `Bearer ${state.session.access_token}`,
+        },
+      },
+    );
+    if (!response.ok) throw new Error(t("submission.reopen.error"));
+    await refreshAfterWrite();
+  } catch (error) {
+    state.modalError = error.message || t("submission.reopen.error");
+  } finally {
+    render();
+  }
 }
 
 // Reuses the same tone classes badge() already relies on (.active =
@@ -1464,7 +1548,7 @@ async function deleteMessage(id) {
 // leaves the browser. It runs directly on the main window rather than in a
 // sandboxed iframe: the only bridge Python code gets to JS is an explicit
 // `from js import ...`, the Supabase anon key already sitting in
-// window.CODENEST_CONFIG is a publishable client key (Row Level Security,
+// window.HERO_CONFIG is a publishable client key (Row Level Security,
 // not key secrecy, is what actually protects data), and a student with
 // browser devtools already has equal or greater access than that bridge
 // would grant — so this isn't a materially new attack surface for what is
@@ -1813,9 +1897,9 @@ async function supabaseInsert(table, rows) {
   const body = await response.json().catch(() => []);
   if (!response.ok) {
     if (response.status === 409) {
-      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+      throw new Error(friendlyDuplicateMessage(body) || "That already exists — please check for a duplicate entry.");
     }
-    throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
+    throw new Error(friendlyWriteErrorMessage(response, body));
   }
   return body;
 }
@@ -1841,12 +1925,12 @@ async function supabaseUpdate(table, filterColumn, filterValue, patch) {
   const body = await response.json().catch(() => []);
   if (!response.ok) {
     if (response.status === 409) {
-      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+      throw new Error(friendlyDuplicateMessage(body) || "That already exists — please check for a duplicate entry.");
     }
-    throw new Error(body?.message || body?.hint || `Could not save changes to ${table}.`);
+    throw new Error(friendlyWriteErrorMessage(response, body));
   }
   if (Array.isArray(body) && body.length === 0) {
-    throw new Error(`No matching ${table} row was updated — you may not have permission to change it.`);
+    throw new Error("That couldn't be updated — you may not have permission, or it may no longer exist.");
   }
   return body;
 }
@@ -1873,6 +1957,24 @@ function friendlyDuplicateMessage(body) {
   return "";
 }
 
+// PostgREST failures carry raw Postgres/RLS text meant for a developer
+// reading logs, not a Manager/Instructor filling in a form (e.g. `new row
+// violates row-level security policy for table "students"`, or a
+// constraint name like `students_group_id_fkey`). Every non-409 write
+// failure is funneled through here so the UI only ever shows plain,
+// non-technical language — never a table name, a policy name, or raw
+// Postgres error text — regardless of which write helper below threw it.
+function friendlyWriteErrorMessage(response, body) {
+  const raw = String(body?.message || body?.hint || "");
+  if (response.status === 401 || response.status === 403 || /row-level security|permission denied/i.test(raw)) {
+    return "You don't have permission to make this change.";
+  }
+  if (/violates foreign key|violates not-null|violates check constraint/i.test(raw)) {
+    return "Some required information is missing or invalid — please check the form and try again.";
+  }
+  return "Something went wrong saving your changes. Please try again.";
+}
+
 // Insert-or-update in one call, keyed on `onConflict` columns — used for
 // attendance/grades, where re-submitting should overwrite existing rows
 // instead of creating duplicates (see the `unique` constraints in the
@@ -1893,9 +1995,9 @@ async function supabaseUpsert(table, rows, onConflict) {
   const body = await response.json().catch(() => []);
   if (!response.ok) {
     if (response.status === 409) {
-      throw new Error(friendlyDuplicateMessage(body) || `That already exists in ${table} — check for a duplicate entry.`);
+      throw new Error(friendlyDuplicateMessage(body) || "That already exists — please check for a duplicate entry.");
     }
-    throw new Error(body?.message || body?.hint || `Could not save to ${table}.`);
+    throw new Error(friendlyWriteErrorMessage(response, body));
   }
   return body;
 }
@@ -1913,8 +2015,10 @@ async function supabaseUploadFile(path, file, bucket = "materials") {
     body: file,
   });
   if (!response.ok) {
-    const detail = await response.text().catch(() => "");
-    throw new Error(detail || "Could not upload the file.");
+    // The raw response body here is Supabase Storage's own error text
+    // (sometimes XML), not something a Manager/Instructor should ever see
+    // in a form — always show a plain, generic message instead.
+    throw new Error("Could not upload the file. Please try again.");
   }
 }
 
@@ -2215,7 +2319,7 @@ async function loadFromSupabase(token) {
   if (!hasSupabaseConfig()) return;
 
   const failures = [];
-  const TOTAL_TABLES = 10; // must match the number of safeSelect(...) calls below
+  const TOTAL_TABLES = 11; // must match the number of safeSelect(...) calls below
   const safeSelect = (table, select = "*") =>
     supabaseSelect(table, select, token).catch((error) => {
       failures.push({ table, message: error.message || String(error) });
@@ -2234,6 +2338,7 @@ async function loadFromSupabase(token) {
       staffRequestRows,
       gradeRows,
       submissionRows,
+      assignmentReopenRows,
     ] = await Promise.all([
       safeSelect("school_settings"),
       safeSelect("students"),
@@ -2245,6 +2350,7 @@ async function loadFromSupabase(token) {
       safeSelect("staff_requests"),
       safeSelect("grades"),
       safeSelect("submissions"),
+      safeSelect("assignment_reopens"),
     ]);
 
     const settings = settingsRows ? settingsRows[0] : null;
@@ -2367,6 +2473,12 @@ async function loadFromSupabase(token) {
       filePath: submission.file_path,
       fileName: submission.file_name,
       submittedAt: submission.submitted_at,
+    }));
+
+    assignmentReopens = assignmentReopenRows === null ? assignmentReopens : assignmentReopenRows.map((reopen) => ({
+      assignmentId: reopen.assignment_id,
+      studentId: reopen.student_id,
+      reopenedAt: reopen.reopened_at,
     }));
 
     // Keeping this in plain, friendly language on purpose — dataSource.label
@@ -3540,10 +3652,10 @@ async function handleSaveSettings(event) {
     });
     const body = await response.json().catch(() => []);
     if (!response.ok) {
-      throw new Error(body?.message || body?.hint || t("errors.generic"));
+      throw new Error(friendlyWriteErrorMessage(response, body));
     }
     if (Array.isArray(body) && body.length === 0) {
-      throw new Error("No school settings row was updated — is more than one row present, or none at all?");
+      throw new Error(t("errors.generic"));
     }
     school = { ...school, name, portalUrl, settings: nextSettings };
     state.settingsNotice = t("settings.saved");
@@ -3679,6 +3791,9 @@ function assignmentDetailModal(modal) {
   const status = assignmentStatusForStudent(assignment, student.id);
   const mySubmission = submissionFor(assignment.id, student.id);
   const myGrade = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
+  const deadlinePassed = assignmentDeadlinePassed(assignment);
+  const reopened = isReopenedFor(assignment.id, student.id);
+  const canSubmit = !deadlinePassed || reopened;
 
   return `
     <h2>${escapeHtml(assignment.title)}</h2>
@@ -3702,12 +3817,19 @@ function assignmentDetailModal(modal) {
           : ""
       }
     </dl>
-    <form onsubmit="handleSubmitAssignment(event, '${escapeJs(assignment.id)}')">
-      <label>${mySubmission ? t("submission.form.resubmit") : t("submission.form.file")}<input type="file" name="file" required /></label>
-      <div class="modal-actions">
-        <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.uploading") : mySubmission ? t("submission.form.resubmitSubmit") : t("submission.form.submit")}</button>
-      </div>
-    </form>
+    ${
+      canSubmit
+        ? `
+          ${reopened && deadlinePassed ? `<p class="hint">${t("submission.reopenedNotice")}</p>` : ""}
+          <form onsubmit="handleSubmitAssignment(event, '${escapeJs(assignment.id)}')">
+            <label>${mySubmission ? t("submission.form.resubmit") : t("submission.form.file")}<input type="file" name="file" required /></label>
+            <div class="modal-actions">
+              <button type="submit" ${state.modalBusy ? "disabled" : ""}>${state.modalBusy ? t("common.uploading") : mySubmission ? t("submission.form.resubmitSubmit") : t("submission.form.submit")}</button>
+            </div>
+          </form>
+        `
+        : `<p class="hint">${t("submission.deadlinePassed")}</p>`
+    }
   `;
 }
 
@@ -3718,6 +3840,16 @@ async function handleSubmitAssignment(event, assignmentId) {
   const student = people.students[0];
   if (!file || !student) {
     state.modalError = t("submission.form.missingFile");
+    render();
+    return;
+  }
+  const assignment = assignments.find((a) => a.id === assignmentId);
+  // Belt-and-suspenders: the form is already hidden once the deadline has
+  // passed (see assignmentDetailModal), but RLS is what actually enforces
+  // this (0017_assignment_deadline_and_reopen.sql) — this just avoids a
+  // pointless round trip that would fail anyway.
+  if (assignment && !canSubmitAssignment(assignment, student.id)) {
+    state.modalError = t("submission.deadlinePassed");
     render();
     return;
   }
@@ -5552,6 +5684,8 @@ window.setLanguage = setLanguage;
 window.chooseLoginMode = chooseLoginMode;
 window.backToLoginChooser = backToLoginChooser;
 window.handleSaveGrade = handleSaveGrade;
+window.handleReopenSubmission = handleReopenSubmission;
+window.handleCloseReopen = handleCloseReopen;
 window.setChatGroup = setChatGroup;
 window.handleSendMessage = handleSendMessage;
 window.deleteMessage = deleteMessage;

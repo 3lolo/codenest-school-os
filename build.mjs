@@ -45,7 +45,7 @@ await cp(join(root, "sw.js"), join(dist, "sw.js"));
 // src/app.js). Not part of the SPA build itself, just copied through.
 await cp(join(root, "scratch"), join(dist, "scratch"), { recursive: true });
 
-const config = `window.CODENEST_CONFIG = ${JSON.stringify(
+const config = `window.HERO_CONFIG = ${JSON.stringify(
   {
     supabaseUrl,
     supabaseAnonKey,
