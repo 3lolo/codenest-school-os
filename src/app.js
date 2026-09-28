@@ -912,7 +912,7 @@ function groupDetailView() {
             groupMaterials
               .map(
                 (m) =>
-                  `<tr><td><strong>${escapeHtml(m.title)}</strong><span>${escapeHtml(m.fileName)}</span></td><td>${m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "—"}</td><td><button onclick="supabaseDownloadFile('${escapeJs(m.filePath)}', '${escapeJs(m.fileName)}')">${t("common.download")}</button></td></tr>`,
+                  `<tr><td><strong>${escapeHtml(m.title)}</strong><span>${escapeHtml(m.fileName)}</span></td><td>${m.createdAt ? new Date(m.createdAt).toLocaleDateString() : "—"}</td><td><button onclick="openStorageFile('materials', '${escapeJs(m.filePath)}', '${escapeJs(m.fileName)}', 'view')">${t("common.view")}</button> <button onclick="openStorageFile('materials', '${escapeJs(m.filePath)}', '${escapeJs(m.fileName)}', 'download')">${t("common.download")}</button></td></tr>`,
               )
               .join("") || `<tr><td colspan="3" class="empty">${t("materials.noneYet")}</td></tr>`
           }
@@ -1132,9 +1132,18 @@ function gradeRosterRows(assignment, roster) {
           const existing = grades.find((g) => g.assignmentId === assignment.id && g.studentId === student.id);
           const status = assignmentStatusForStudent(assignment, student.id);
           const canGrade = status !== "notYet" || Boolean(existing);
+          // A grader could never actually see what a student turned in
+          // before — only this status badge. Show a "View" link straight
+          // to the delivered file whenever one exists, so grading doesn't
+          // mean scoring blind.
+          const submission = submissionFor(assignment.id, student.id);
           return `
             <div class="attendance-row">
-              <span>${escapeHtml(fullName(student))} ${gradeStatusBadge(status)}</span>
+              <span>${escapeHtml(fullName(student))} ${gradeStatusBadge(status)}${
+                submission
+                  ? ` <button type="button" class="link-button" onclick="openStorageFile('submissions', '${escapeJs(submission.filePath)}', '${escapeJs(submission.fileName)}', 'view')">${t("common.view")}</button>`
+                  : ""
+              }</span>
               ${
                 canGrade
                   ? `<input type="number" min="0" max="${assignment.maxGrade}" step="0.5" name="score-${escapeHtml(student.id)}" data-student-id="${escapeHtml(student.id)}" value="${existing ? existing.score : ""}" placeholder="${t("grades.table.score")}" />`
@@ -1917,6 +1926,16 @@ async function supabaseUploadFile(path, file, bucket = "materials") {
 // orphaned file is a much smaller problem than a group that won't delete.
 async function supabaseDeleteFile(path, bucket = "materials") {
   if (!state.session) return;
+  if (config.r2Enabled) {
+    // Best-effort, same as the Supabase branch below — a failed delete
+    // here just leaves an orphaned R2 object, not a broken group deletion.
+    await fetch("/api/storage-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.session.access_token}` },
+      body: JSON.stringify({ purpose: bucket, key: path }),
+    }).catch(() => {});
+    return;
+  }
   const base = config.supabaseUrl.replace(/\/$/, "");
   await fetch(`${base}/storage/v1/object/${bucket}/${path}`, {
     method: "DELETE",
@@ -1944,6 +1963,93 @@ async function supabaseDownloadFile(path, fileName, bucket = "materials") {
   link.download = fileName || "material";
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+// Same idea as supabaseDownloadFile(), but opens the blob in a new tab
+// instead of forcing a save — used as the pre-R2 fallback for "View" (see
+// openStorageFile() below). A blob: URL renders natively for anything the
+// browser already knows how to display (images, PDFs, video, audio); for
+// anything else the browser's own download-prompt behavior for an
+// unrecognized type is exactly the same fallback a plain Supabase Storage
+// URL would have given anyway.
+async function viewPrivateFileBlob(path, bucket = "materials") {
+  if (!state.session) return;
+  const base = config.supabaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/storage/v1/object/${bucket}/${path}`, {
+    headers: {
+      apikey: config.supabaseAnonKey,
+      Authorization: `Bearer ${state.session.access_token}`,
+    },
+  });
+  if (!response.ok) return;
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// ---------------------------------------------------------------------
+// Cloudflare R2 file storage. See api/_lib/r2.js, api/storage-upload-url.js,
+// api/storage-view-url.js, and scripts/migrate-storage-to-r2.mjs. Every
+// call site that used to go straight at Supabase Storage (materials,
+// assignment attachments, and student submissions — never gallery, which
+// is public and handled separately by galleryPublicUrl() below) now goes
+// through openStorageFile()/uploadStorageFile() instead, which pick
+// between R2 and the original Supabase Storage path based on
+// config.r2Enabled (see build.mjs) — so the app keeps working exactly as
+// it always did right up until R2 is configured and the one-time
+// migration script has run, with no user-visible transition at all.
+// ---------------------------------------------------------------------
+
+async function uploadStorageFile(purpose, key, file) {
+  if (!config.r2Enabled) {
+    await supabaseUploadFile(key, file, purpose);
+    return;
+  }
+  if (!state.session) throw new Error("Sign in and try again.");
+  const presignResponse = await fetch("/api/storage-upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.session.access_token}` },
+    body: JSON.stringify({ purpose, key, contentType: file.type || "application/octet-stream" }),
+  });
+  const presignBody = await presignResponse.json().catch(() => ({}));
+  if (!presignResponse.ok) throw new Error(presignBody?.error || "Could not prepare the upload.");
+  const uploadResponse = await fetch(presignBody.uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!uploadResponse.ok) throw new Error("Could not upload the file.");
+}
+
+// mode: "view" opens the file in a new tab (browsers render images, PDFs,
+// video, and audio inline; anything else falls back to their own default
+// handling for an unrecognized type). "download" forces a save-as. Both
+// go through the exact same authorization check server-side — this only
+// ever changes how the browser presents bytes it was already allowed to
+// read.
+async function openStorageFile(purpose, key, fileName, mode = "view") {
+  if (!config.r2Enabled) {
+    if (mode === "download") await supabaseDownloadFile(key, fileName, purpose);
+    else await viewPrivateFileBlob(key, purpose);
+    return;
+  }
+  if (!state.session) return;
+  const response = await fetch("/api/storage-view-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${state.session.access_token}` },
+    body: JSON.stringify({ purpose, key, mode, fileName }),
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || !body.url) return;
+  if (mode === "download") {
+    const link = document.createElement("a");
+    link.href = body.url;
+    link.download = fileName || "file";
+    link.click();
+  } else {
+    window.open(body.url, "_blank");
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -3465,7 +3571,7 @@ async function handleAddMaterial(event, groupId) {
   try {
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
     const path = `${groupId}/${Date.now()}-${safeName}`;
-    await supabaseUploadFile(path, file);
+    await uploadStorageFile("materials", path, file);
     await supabaseInsert("materials", [
       {
         title,
@@ -3518,7 +3624,7 @@ async function handleAddAssignment(event, groupId) {
     if (attachment) {
       const safeName = attachment.name.replace(/[^\w.\-]+/g, "_");
       attachmentPath = `${groupId}/assignment-attachments/${Date.now()}-${safeName}`;
-      await supabaseUploadFile(attachmentPath, attachment);
+      await uploadStorageFile("materials", attachmentPath, attachment);
       attachmentName = attachment.name;
     }
     const total = studentsInGroup(groupId).length;
@@ -3582,12 +3688,12 @@ function assignmentDetailModal(modal) {
       <div><dt>${t("common.status")}</dt><dd>${gradeStatusBadge(status)}</dd></div>
       ${
         assignment.attachmentPath
-          ? `<div><dt>${t("assignments.form.attachment")}</dt><dd><button type="button" onclick="supabaseDownloadFile('${escapeJs(assignment.attachmentPath)}', '${escapeJs(assignment.attachmentName || "")}')">${t("common.download")}</button></dd></div>`
+          ? `<div><dt>${t("assignments.form.attachment")}</dt><dd><button type="button" onclick="openStorageFile('materials', '${escapeJs(assignment.attachmentPath)}', '${escapeJs(assignment.attachmentName || "")}', 'view')">${t("common.view")}</button> <button type="button" onclick="openStorageFile('materials', '${escapeJs(assignment.attachmentPath)}', '${escapeJs(assignment.attachmentName || "")}', 'download')">${t("common.download")}</button></dd></div>`
           : ""
       }
       ${
         mySubmission
-          ? `<div><dt>${t("submission.yourFile")}</dt><dd>${escapeHtml(mySubmission.fileName)} · ${new Date(mySubmission.submittedAt).toLocaleString()} <button type="button" onclick="supabaseDownloadFile('${escapeJs(mySubmission.filePath)}', '${escapeJs(mySubmission.fileName)}', 'submissions')">${t("common.download")}</button></dd></div>`
+          ? `<div><dt>${t("submission.yourFile")}</dt><dd>${escapeHtml(mySubmission.fileName)} · ${new Date(mySubmission.submittedAt).toLocaleString()} <button type="button" onclick="openStorageFile('submissions', '${escapeJs(mySubmission.filePath)}', '${escapeJs(mySubmission.fileName)}', 'view')">${t("common.view")}</button> <button type="button" onclick="openStorageFile('submissions', '${escapeJs(mySubmission.filePath)}', '${escapeJs(mySubmission.fileName)}', 'download')">${t("common.download")}</button></dd></div>`
           : ""
       }
       ${
@@ -3622,7 +3728,7 @@ async function handleSubmitAssignment(event, assignmentId) {
   try {
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
     const path = `${assignmentId}/${student.id}/${Date.now()}-${safeName}`;
-    await supabaseUploadFile(path, file, "submissions");
+    await uploadStorageFile("submissions", path, file);
     await supabaseUpsert(
       "submissions",
       [{ assignment_id: assignmentId, student_id: student.id, file_path: path, file_name: file.name }],
@@ -3791,6 +3897,7 @@ const sampleReviews = [
 // URL needs no access token — this just builds that stable public path.
 function galleryPublicUrl(path) {
   if (!path) return "";
+  if (config.r2PublicBaseUrl) return `${config.r2PublicBaseUrl.replace(/\/$/, "")}/gallery/${path}`;
   const base = config.supabaseUrl ? config.supabaseUrl.replace(/\/$/, "") : "";
   return `${base}/storage/v1/object/public/gallery/${path}`;
 }
@@ -4902,12 +5009,12 @@ async function handleAddGalleryItem(event) {
     const type = file.type.startsWith("video/") ? "video" : "image";
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
     const filePath = `${Date.now()}-${safeName}`;
-    await supabaseUploadFile(filePath, file, "gallery");
+    await uploadStorageFile("gallery", filePath, file);
     let posterPath = null;
     if (posterFile) {
       const safePosterName = posterFile.name.replace(/[^\w.\-]+/g, "_");
       posterPath = `${Date.now()}-poster-${safePosterName}`;
-      await supabaseUploadFile(posterPath, posterFile, "gallery");
+      await uploadStorageFile("gallery", posterPath, posterFile);
     }
     await supabaseInsert("gallery_items", [
       {
@@ -5413,6 +5520,7 @@ window.handleAddMaterial = handleAddMaterial;
 window.handleAddAssignment = handleAddAssignment;
 window.handleSubmitAssignment = handleSubmitAssignment;
 window.supabaseDownloadFile = supabaseDownloadFile;
+window.openStorageFile = openStorageFile;
 window.selectStudent = selectStudent;
 window.setStudentGroupFilter = setStudentGroupFilter;
 window.exportStudentsCsv = exportStudentsCsv;

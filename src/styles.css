@@ -986,6 +986,24 @@ code {
   font-size: 12px;
 }
 
+/* An inline "View" next to a badge/label — not a standalone action, so it
+   shouldn't look like a full button (see gradeRosterRows() in app.js). */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent, #2563eb);
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  width: auto;
+}
+
+.link-button:hover {
+  opacity: 0.8;
+}
+
 .hint {
   color: var(--muted);
   font-size: 13px;

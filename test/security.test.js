@@ -246,3 +246,40 @@ test("students insert policy lets an instructor add a student to their own group
   assert.match(sql, /for insert/i);
   assert.match(sql, /instructor_owns_group\(students\.group_id\)/);
 });
+
+test("storage-upload-url API re-verifies the caller server-side and scopes each purpose to who could already write there", async () => {
+  const source = await readFile(new URL("../api/storage-upload-url.js", import.meta.url), "utf8");
+  assert.match(source, /user_profiles\?user_id=eq\.\$\{callerUser\.id\}/);
+  // Gallery uploads stay Manager-only, same as the original
+  // "gallery bucket write admin" Supabase Storage policy.
+  assert.match(source, /allowed = MANAGER_ROLES\.includes\(caller\.role\)/);
+  // Materials: a Manager, or the group's own Instructor — never an
+  // Instructor for a group they don't own, and never a bare key with no
+  // group segment.
+  assert.match(source, /rows\[0\]\?\.instructor === caller\.instructorName/);
+  // Every key is validated as a plain relative path before it's ever used
+  // to build an R2 object key or a Supabase lookup — no leading slash, no
+  // ".." segments that could climb into someone else's purpose folder.
+  assert.match(source, /segment !== "\.\."/);
+});
+
+test("storage-view-url API only ever signs materials/submissions (gallery is public) and checks the same ownership rules as the write path", async () => {
+  const source = await readFile(new URL("../api/storage-view-url.js", import.meta.url), "utf8");
+  assert.match(source, /const PURPOSES = \["materials", "submissions"\]/);
+  assert.match(source, /user_profiles\?user_id=eq\.\$\{callerUser\.id\}/);
+  // "view" opens inline, "download" forces a save-as — same authorization
+  // check either way, only the response-content-disposition differs.
+  assert.match(source, /mode === "download" \? `attachment; filename="\$\{fileName\}"` : "inline"/);
+});
+
+test("storage-delete API never allows deleting a submission, and gates materials/gallery deletes the same as their write policies", async () => {
+  const source = await readFile(new URL("../api/storage-delete.js", import.meta.url), "utf8");
+  assert.match(source, /const PURPOSES = \["materials", "gallery"\]/);
+  assert.match(source, /user_profiles\?user_id=eq\.\$\{callerUser\.id\}/);
+});
+
+test("R2 helper never lets an unsigned request through and supports the inline/attachment override presigned GET URLs rely on", async () => {
+  const source = await readFile(new URL("../api/_lib/r2.js", import.meta.url), "utf8");
+  assert.match(source, /signQuery: true/);
+  assert.match(source, /response-content-disposition/);
+});
