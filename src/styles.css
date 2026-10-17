@@ -7,10 +7,13 @@
   --panel: #ffffff;
   --panel-rgb: 255, 255, 255;
   --bg: #eef1f6;
-  --brand: #1f7a72;
-  --brand-dark: #12514c;
-  --brand-light: #e4f3f1;
-  --gold: #c2901f;
+  /* Hero Tech Academy brand palette: deep navy + gold, matching the
+     logo/marketing artwork (see src/assets/logo-*.png and
+     pwa-icon-*.png, recolored to the same hues). */
+  --brand: #0a316a;
+  --brand-dark: #071d40;
+  --brand-light: #e6ecf6;
+  --gold: #bf8a12;
   --coral: #c9573f;
   --blue: #315f9f;
   --green: #2f7a4f;
@@ -43,10 +46,12 @@
   --panel: #202b3a;
   --panel-rgb: 32, 43, 58;
   --bg: #10161f;
-  --brand: #3fb4a6;
-  --brand-dark: #1f7a72;
-  --brand-light: #1b3733;
-  --gold: #dba83c;
+  /* Same navy + gold brand, lightened/brightened enough to stay legible
+     against a near-black background. */
+  --brand: #6fa3e0;
+  --brand-dark: #3d6fa8;
+  --brand-light: #1b2a42;
+  --gold: #e8ba3d;
   --coral: #e0836d;
   --blue: #6d9bdd;
   --green: #57b483;
@@ -107,7 +112,7 @@ button:hover,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 3px solid rgba(31, 122, 114, 0.18);
+  outline: 3px solid rgba(10, 49, 106, 0.18);
   border-color: var(--brand);
 }
 
@@ -624,7 +629,7 @@ dt {
   background: var(--brand);
   border-color: var(--brand);
   color: #fff;
-  box-shadow: 0 4px 12px rgba(31, 122, 114, 0.25);
+  box-shadow: 0 4px 12px rgba(10, 49, 106, 0.25);
 }
 
 .toolbar button:first-child:hover,
@@ -992,7 +997,7 @@ code {
   background: none;
   border: none;
   padding: 0;
-  color: var(--accent, #2563eb);
+  color: var(--brand);
   font-size: 12px;
   font-weight: 600;
   text-decoration: underline;
@@ -2631,7 +2636,7 @@ code {
 }
 
 .lang-option:hover {
-  background: rgba(31, 122, 114, 0.1);
+  background: rgba(10, 49, 106, 0.1);
   color: var(--ink);
   transform: none;
   box-shadow: none;
