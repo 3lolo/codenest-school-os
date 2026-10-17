@@ -46,9 +46,13 @@
   --panel: #202b3a;
   --panel-rgb: 32, 43, 58;
   --bg: #10161f;
-  /* Same navy + gold brand, lightened/brightened enough to stay legible
-     against a near-black background. */
-  --brand: #6fa3e0;
+  /* Same navy + gold brand. --brand is deliberately a mid-tone blue, not
+     a light one: it's used BOTH as text/borders/icons against the dark
+     page (wants to be light) AND as a solid button fill with white text
+     on top (wants to be dark enough for that white text to read). This
+     value is the compromise that keeps both legible; --brand-dark stays
+     reserved for hover/pressed states, where it can afford to go darker. */
+  --brand: #4878b8;
   --brand-dark: #3d6fa8;
   --brand-light: #1b2a42;
   --gold: #e8ba3d;
@@ -214,11 +218,14 @@ nav {
 
 .nav-item.active {
   background: var(--brand-light);
-  color: var(--brand-dark);
+  /* var(--brand), not var(--brand-dark) — see the comment on --brand in
+     the dark-mode token block: --brand-dark is unreadable here once the
+     page is dark. */
+  color: var(--brand);
 }
 
 .nav-item.active span {
-  color: var(--brand-dark);
+  color: var(--brand);
 }
 
 /* The accent bar that marks the active tab — bleeds slightly past the
@@ -358,7 +365,7 @@ h2 {
   place-items: center;
   border-radius: 10px;
   background: var(--brand-light);
-  color: var(--brand-dark);
+  color: var(--brand);
   font-size: 16px;
 }
 
@@ -404,7 +411,7 @@ h2 {
 }
 
 .metric-grid .metric:nth-child(6) {
-  border-top-color: var(--brand-dark);
+  border-top-color: var(--brand);
 }
 
 .metric span,
@@ -477,7 +484,7 @@ dt {
 
 .meter {
   height: 8px;
-  background: #e7ecf1;
+  background: var(--line);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -636,7 +643,7 @@ dt {
 .panel-head button:first-of-type:hover {
   background: var(--brand-dark);
   border-color: var(--brand-dark);
-  box-shadow: 0 6px 16px rgba(18, 81, 76, 0.32);
+  box-shadow: 0 6px 16px rgba(7, 29, 64, 0.32);
 }
 
 .table-panel {
@@ -689,8 +696,12 @@ td span {
   padding: 0 10px;
   font-size: 12px;
   font-weight: 800;
-  color: var(--brand-dark);
-  background: #d9efeb;
+  /* var(--brand), not var(--brand-dark): in dark mode --brand-dark is a
+     deep navy that's nearly unreadable against the --brand-light wash
+     right below it. --brand is the one token in this pair that's always
+     lightened enough for the opposite mode's background. */
+  color: var(--brand);
+  background: var(--brand-light);
   white-space: nowrap;
 }
 
@@ -885,7 +896,7 @@ code {
   min-height: 100vh;
   display: grid;
   place-items: center;
-  background: linear-gradient(160deg, #172329, var(--brand-dark));
+  background: linear-gradient(160deg, #0a1626, var(--brand-dark));
   padding: 24px;
 }
 
@@ -1073,7 +1084,7 @@ code {
 
 .auth-audience-tag {
   background: var(--brand-light);
-  color: var(--brand-dark);
+  color: var(--brand);
   border-radius: 999px;
   padding: 4px 12px;
   font-size: 11px;
@@ -1154,9 +1165,9 @@ code {
 .marketing {
   grid-column: 1 / -1;
   background:
-    radial-gradient(circle at 12% 8%, rgba(36, 107, 103, 0.09), transparent 45%),
+    radial-gradient(circle at 12% 8%, rgba(10, 49, 106, 0.09), transparent 45%),
     radial-gradient(circle at 88% 4%, rgba(201, 95, 79, 0.09), transparent 42%),
-    radial-gradient(circle at 55% 34%, rgba(188, 134, 39, 0.07), transparent 40%),
+    radial-gradient(circle at 55% 34%, rgba(191, 138, 18, 0.07), transparent 40%),
     var(--bg);
   color: var(--ink);
   min-height: 100vh;
@@ -1317,22 +1328,27 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--coral);
-  border: 1px solid var(--coral);
+  /* The brand's gold, not coral — this is the single most prominent
+     button on the page, so it should read as "Hero Tech Academy" rather
+     than an unrelated accent color. Dark navy text (not white) on gold:
+     navy-on-gold contrast is roughly 4x better than white-on-gold would
+     be here (gold is an inherently light hue). */
+  background: var(--gold);
+  border: 1px solid var(--gold);
   border-radius: 8px;
-  color: #fff;
+  color: var(--brand-dark);
   font-weight: 700;
   padding: 0 22px;
   min-height: 46px;
   text-decoration: none;
-  box-shadow: 0 6px 16px rgba(201, 95, 79, 0.28);
+  box-shadow: 0 6px 16px rgba(191, 138, 18, 0.28);
   transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
 }
 
 .m-cta-primary:hover {
   filter: brightness(0.94);
   transform: translateY(-2px);
-  box-shadow: 0 10px 22px rgba(201, 95, 79, 0.34);
+  box-shadow: 0 10px 22px rgba(191, 138, 18, 0.34);
 }
 
 .m-cta-secondary {
@@ -1395,7 +1411,11 @@ code {
 .m-cta-secondary {
   display: inline-flex;
   align-items: center;
-  border: 1px solid var(--line);
+  /* var(--line) is meant for subtle dividers, not a button outline — in
+     dark mode it's nearly invisible against --bg (both are dark navy).
+     var(--muted) gives this button an outline you can actually see in
+     both themes. */
+  border: 1px solid var(--muted);
   border-radius: 8px;
   padding: 0 22px;
   min-height: 46px;
@@ -1448,9 +1468,9 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #fff;
+  background: var(--panel);
   border: 1.5px solid var(--gold);
-  color: #7a5a10;
+  color: var(--gold);
   font-weight: 700;
   border-radius: 999px;
   padding: 0 20px;
@@ -1466,13 +1486,13 @@ code {
 
 .m-review-cta:hover {
   background: var(--gold);
-  color: #fff;
+  color: var(--brand-dark);
   transform: translateY(-2px);
-  box-shadow: 0 8px 18px rgba(188, 134, 39, 0.3);
+  box-shadow: 0 8px 18px rgba(191, 138, 18, 0.3);
 }
 
 .m-review-cta:hover span {
-  color: #fff;
+  color: var(--brand-dark);
 }
 
 .m-cards {
@@ -1530,7 +1550,7 @@ code {
 }
 
 .m-review-stars {
-  color: #d4a017;
+  color: var(--gold);
   font-size: 14px;
   letter-spacing: 1px;
 }
@@ -1635,7 +1655,7 @@ code {
   border-color: var(--brand-dark);
   color: #fff;
   transform: scale(1.03);
-  box-shadow: 0 16px 34px rgba(23, 79, 75, 0.28);
+  box-shadow: 0 16px 34px rgba(7, 29, 64, 0.28);
 }
 
 .m-compare-highlight:hover {
@@ -1651,7 +1671,7 @@ code {
   top: -12px;
   right: 20px;
   background: var(--gold);
-  color: #2c2005;
+  color: var(--brand-dark);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
@@ -1924,9 +1944,9 @@ code {
 }
 
 .promo-cta {
-  background: var(--coral);
-  border: 1px solid var(--coral);
-  color: #fff;
+  background: var(--gold);
+  border: 1px solid var(--gold);
+  color: var(--brand-dark);
   font-weight: 700;
   min-height: 46px;
   border-radius: 8px;
@@ -2186,7 +2206,7 @@ code {
   padding: 4px 10px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--brand-dark);
+  color: var(--brand);
 }
 
 /* ---------- Students tab: clickable rows + attendance-taking modal ---------- */
